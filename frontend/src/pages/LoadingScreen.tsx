@@ -50,7 +50,7 @@ export default function LoadingScreen() {
         className="text-center z-10"
       >
         <h1 className="font-display font-extrabold text-3xl md:text-4xl text-white tracking-tight mb-2">
-          Mobileum Renewals Intelligence
+          Mobileum Horizon
         </h1>
         <p className="text-sm font-semibold tracking-wider uppercase text-teal-400">
           Executive Pipeline Platform

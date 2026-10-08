@@ -8,6 +8,8 @@ import { useAppStore } from '@/store/appStore'
 import { useEffect } from 'react'
 
 export default function Shell() {
+  const activeSnapshot = useAppStore(s => s.snapshots.find(snap => snap.id === s.activeSnapshotId))
+  const asOf = activeSnapshot?.snapshot_date ? new Date(activeSnapshot.snapshot_date).toLocaleDateString() : 'N/A'
   const setOpen = useAppStore(s => s.setCommandPaletteOpen)
   const selectedOppId = useAppStore(s => s.selectedOppId)
   const setSelectedOppId = useAppStore(s => s.setSelectedOppId)
@@ -30,6 +32,9 @@ export default function Shell() {
         <Topbar />
         <main className="flex-1 overflow-y-auto p-6">
           <Outlet />
+                  <footer className="mt-8 text-center text-xs text-slate-400 font-medium py-4">
+            Mobileum Horizon · Renewals Intelligence Platform · Data as of {asOf}
+          </footer>
         </main>
       </div>
       <CommandPalette />

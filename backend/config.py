@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     ASSETS_DIR: Path = ROOT_DIR / "assets"
 
     # App
-    APP_TITLE: str = "Mobileum Renewals Intelligence"
+    APP_TITLE: str = "Mobileum Horizon"
     APP_VERSION: str = "1.0.0"
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     FISCAL_YEAR_START_MONTH: int = 1

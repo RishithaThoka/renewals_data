@@ -45,7 +45,7 @@ export default function ExecutiveView() {
         <div className="flex items-center gap-3">
           <img src="/assets/logo.png" alt="Mobileum" className="w-10 h-10 object-contain" />
           <div>
-            <h1 className="font-black text-xl text-navy">Renewals Intelligence</h1>
+            <h1 className="font-black text-xl text-navy">Mobileum Horizon</h1>
             <p className="text-sm text-gray-500">Executive View — {formatDate(kpis?.snapshot_date)}</p>
           </div>
         </div>
@@ -95,7 +95,7 @@ export default function ExecutiveView() {
           <div className="flex items-center gap-3">
             <img src="/assets/logo.png" alt="Mobileum" className="w-12 h-12" />
             <div>
-              <h1 className="font-black text-2xl" style={{ color: '#12284C' }}>Mobileum Renewals Intelligence</h1>
+              <h1 className="font-black text-2xl" style={{ color: '#12284C' }}>Mobileum Horizon</h1>
               <p className="text-sm text-gray-500">Snapshot: {kpis?.label} — {formatDate(kpis?.snapshot_date)}</p>
             </div>
           </div>
@@ -222,7 +222,7 @@ export default function ExecutiveView() {
       </div>
 
       <div className="mt-8 text-center text-xs text-gray-300 no-print">
-        Mobileum Renewals Intelligence · Confidential
+        Mobileum Horizon · Confidential
       </div>
     </div>
   )

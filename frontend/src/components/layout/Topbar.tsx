@@ -128,7 +128,7 @@ export default function Topbar() {
               Mobileum
             </h1>
             <p className="text-[10px] font-semibold text-teal-600 dark:text-teal-400 tracking-wider uppercase">
-              Renewals Intelligence
+              Mobileum Horizon
             </p>
           </div>
         </div>

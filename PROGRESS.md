@@ -1,4 +1,4 @@
-# Mobileum Renewals Intelligence — Progress Log
+# Mobileum Horizon — Progress Log
 
 ## 2026-10-08 — Overview Frontend Rebuild (Tab 1)
 

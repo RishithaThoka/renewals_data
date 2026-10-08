@@ -239,7 +239,7 @@ export default function AssistantChat({ isFullPage = false }: AssistantChatProps
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
-                Renewals Intelligence Assistant
+                Mobileum Horizon Assistant
               </span>
               <span
                 className="px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wide flex items-center gap-1"

@@ -8,6 +8,7 @@ import Expiry from '@/pages/Expiry'
 import Approvals from '@/pages/Approvals'
 import BusinessUnits from '@/pages/BusinessUnits'
 import Regions from '@/pages/Regions'
+import Delayed from '@/pages/Delayed'
 import Opportunities from '@/pages/Opportunities'
 import History from '@/pages/History'
 import AIAssistant from '@/pages/AIAssistant'
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/business-units" element={<BusinessUnits />} />
           <Route path="/bu" element={<BusinessUnits />} />
           <Route path="/regions" element={<Regions />} />
+          <Route path="/delayed" element={<Delayed />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/opportunities" element={<Opportunities />} />
           <Route path="/explore" element={<Opportunities />} />

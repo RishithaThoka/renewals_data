@@ -188,7 +188,7 @@ class AIService:
             ],
         }
         return (
-            "You are the Mobileum Renewals Intelligence AI assistant. "
+            "You are the Mobileum Horizon AI assistant. "
             "You help the sales team understand the renewals pipeline. "
             "Answer concisely in 2–4 sentences using the aggregated data below. "
             "Format currency as $X.XXM. Never reveal raw row data.\n\n"

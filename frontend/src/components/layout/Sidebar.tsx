@@ -2,6 +2,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   LayoutDashboard,
+  Clock,
   TrendingUp,
   Calendar,
   CheckCircle2,
@@ -22,13 +23,15 @@ import { useAppStore } from '@/store/appStore'
 import clsx from 'clsx'
 
 const NAV_ITEMS = [
-  { to: '/', icon: LayoutDashboard, label: 'Overview' },
+  { to: '/', icon: LayoutDashboard,
+  Clock, label: 'Overview' },
   { to: '/expiry', icon: Calendar, label: 'Expiry' },
   { to: '/approvals', icon: CheckCircle2, label: 'Approvals' },
   { to: '/business-units', icon: Building2, label: 'Business Units' },
   { to: '/regions', icon: Globe2, label: 'Regions' },
+  { to: '/delayed', icon: Clock, label: 'Delayed Renewals' },
   { to: '/pipeline', icon: TrendingUp, label: 'Pipeline' },
-  { to: '/opportunities', icon: Table2, label: 'Explore' },
+  { to: '/opportunities', icon: Table2, label: 'Data Explorer' },
   { to: '/insights', icon: ShieldAlert, label: 'Insights' },
   { to: '/upload', icon: Upload, label: 'Upload' },
   { to: '/daily-changes', icon: Activity, label: 'Daily Changes' },
@@ -68,10 +71,10 @@ export default function Sidebar() {
             className="overflow-hidden whitespace-nowrap"
           >
             <p className="text-white font-extrabold text-sm leading-tight tracking-wide font-display">
-              Mobileum
+              Mobileum Horizon
             </p>
-            <p className="text-teal-400 text-[11px] font-medium tracking-tight">
-              Renewals Intelligence
+            <p className="text-teal-400 text-[10px] font-medium tracking-tight opacity-90">
+              Renewals Intelligence Platform
             </p>
           </motion.div>
         )}

@@ -1,5 +1,5 @@
 /**
- * Design tokens — single source of truth for "Mobileum Renewals Intelligence".
+ * Design tokens — single source of truth for "Mobileum Horizon".
  * Incorporates brand navy #12284C, teal #00A3AD, violet #8080FF, and blue-to-cyan gradient.
  */
 
