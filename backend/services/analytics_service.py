@@ -132,7 +132,7 @@ class AnalyticsService:
         elif s == "fy2027":
             q = q.filter(ScopeService.is_renewals(), Opportunity.fiscal_period.in_(["Q1-2027", "Q2-2027", "Q3-2027", "Q4-2027"]))
         elif s == "q4_2026":
-            q = q.filter(ScopeService.current_quarter_slice(snapshot.snapshot_date))
+            q = q.filter(ScopeService.current_quarter_slice(ScopeService.current_quarter(snapshot.snapshot_date)))
         elif s == "all":
             pass
 

@@ -163,7 +163,9 @@ class TestOverviewSummary:
     def test_data_slice_label(self, client_and_db):
         client, _ = client_and_db
         r = client.get("/api/v2/overview/summary")
-        assert r.json()["data_slice"] == "Q4 FY26"
+        d = r.json()
+        assert d["data_slice"] == "Q4 FY26"
+        assert d["data_slice_key"] == "Q4-2026"
 
 
 # ── SECTION 2: Approval totals (from regional breakdown) ─────────────────────

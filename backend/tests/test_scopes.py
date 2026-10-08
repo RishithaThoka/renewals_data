@@ -44,8 +44,8 @@ def test_scope_queries(db_session):
     cq = ScopeService.current_quarter(d)
     assert cq == "Q4-2026"
     
-    stmt = select(Opportunity).where(ScopeService.current_quarter_slice(d))
+    stmt = select(Opportunity).where(ScopeService.current_quarter_slice(ScopeService.current_quarter(d)))
     # It should compile successfully
     
-    stmt_slip = select(Opportunity).where(ScopeService.slippage(d))
+    stmt_slip = select(Opportunity).where(ScopeService.slippage(ScopeService.current_quarter(d)))
     # It should compile successfully

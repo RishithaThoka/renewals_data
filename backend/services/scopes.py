@@ -66,28 +66,26 @@ class ScopeService:
         return Opportunity.sales_type == "Renewals"
 
     @staticmethod
-    def current_quarter_slice(snapshot_date: date) -> ColumnElement[bool]:
+    def current_quarter_slice(quarter: str) -> ColumnElement[bool]:
         """Scope: renewals AND fiscal_period == current quarter"""
-        cq = ScopeService.current_quarter(snapshot_date)
         return and_(
             ScopeService.is_renewals(),
-            Opportunity.fiscal_period == cq
+            Opportunity.fiscal_period == quarter
         )
 
     @staticmethod
-    def slippage(snapshot_date: date) -> ColumnElement[bool]:
+    def slippage(quarter: str) -> ColumnElement[bool]:
         """Scope: current_quarter_slice AND close_date after the quarter end"""
-        cq = ScopeService.current_quarter(snapshot_date)
-        _, end_date = ScopeService.quarter_bounds(cq)
+        _, end_date = ScopeService.quarter_bounds(quarter)
         return and_(
-            ScopeService.current_quarter_slice(snapshot_date),
+            ScopeService.current_quarter_slice(quarter),
             Opportunity.close_date > end_date
         )
 
     @staticmethod
-    def delayed(snapshot_date: date) -> ColumnElement[bool]:
+    def delayed(quarter: str) -> ColumnElement[bool]:
         """Scope: renewals AND fiscal_period an earlier quarter of the SAME fiscal year AND forecast_category != 'Closed'"""
-        cq = ScopeService.current_quarter(snapshot_date)
+        cq = quarter
         if not cq or "-" not in cq:
             return False
         

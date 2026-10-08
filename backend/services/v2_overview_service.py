@@ -131,7 +131,7 @@ class V2OverviewService:
             self.db.query(Opportunity)
             .filter(
                 Opportunity.snapshot_id == snap.id,
-                ScopeService.current_quarter_slice(eff_date)
+                ScopeService.current_quarter_slice(ScopeService.current_quarter(eff_date))
             )
         )
         if exclude_deleted:
@@ -383,6 +383,7 @@ class V2OverviewService:
             "snapshot_date":    snap.snapshot_date.isoformat(),
             "snapshot_id":      snap.id,
             "data_slice":       ScopeService.quarter_label(ScopeService.current_quarter(snap.snapshot_date)),
+            "data_slice_key":   ScopeService.current_quarter(snap.snapshot_date),
             "exclude_deleted":  exclude_deleted,
             "other_region_count": other_count,
             # Section 1
