@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #F8FAFC;
+    --bg-secondary: #F1F5F9;
+    --bg-card: #FFFFFF;
+    --bg-card-hover: #F8FAFC;
+    --bg-glass: rgba(255, 255, 255, 0.85);
+    --border: #E2E8F0;
+    --border-subtle: #EDF2F7;
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #64748B;
+    --sidebar-bg: #12284C;
+    --sidebar-text: #E2E8F0;
+    --sidebar-accent: #00A3AD;
+    --brand-navy: #12284C;
+    --brand-teal: #00A3AD;
+    --brand-violet: #8080FF;
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(18, 40, 76, 0.06);
+    --card-hover-shadow: 0 12px 32px rgba(0, 163, 173, 0.16);
+  }
+
+  .dark {
+    --bg-primary: #081220;
+    --bg-secondary: #0B192C;
+    --bg-card: #0F213A;
+    --bg-card-hover: #152A47;
+    --bg-glass: rgba(15, 33, 58, 0.85);
+    --border: #1E3A60;
+    --border-subtle: #142944;
+    --text-primary: #F8FAFC;
+    --text-secondary: #CBD5E1;
+    --text-muted: #94A3B8;
+    --sidebar-bg: #050E1B;
+    --sidebar-text: #C5D1E8;
+    --sidebar-accent: #00C4D0;
+    --brand-navy: #1A3B6F;
+    --brand-teal: #00C4D0;
+    --brand-violet: #A3A3FF;
+    --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --card-hover-shadow: 0 12px 32px rgba(0, 196, 208, 0.22);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color 0.25s ease, color 0.25s ease;
+    margin: 0;
+  }
+
+  /* Force tabular figures for numbers across the app */
+  .tabular-nums,
+  .kpi-value,
+  table,
+  td,
+  th,
+  .metric-value {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 163, 173, 0.28);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 163, 173, 0.55);
+  }
+}
+
+@layer components {
+  /* Distinctive Display Font */
+  .font-display {
+    font-family: 'Plus Jakarta Sans', 'Sora', 'Inter', system-ui, sans-serif;
+  }
+
+  /* Premium Card with Glass Effect & Soft Elevation */
+  .card-premium {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow);
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .card-premium:hover {
+    box-shadow: var(--card-hover-shadow);
+  }
+
+  .card-glass {
+    background: var(--bg-glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+  }
+
+  /* Brand Gradient Text */
+  .text-gradient-brand {
+    background: linear-gradient(135deg, #00A3AD 0%, #00D2DF 50%, #8080FF 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Shimmer effect for skeleton loading */
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--bg-secondary) 25%,
+      var(--border) 50%,
+      var(--bg-secondary) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.8s infinite;
+    border-radius: 8px;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print styles for Executive View */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .card-premium {
+    box-shadow: none !important;
+    border: 1px solid #E2E8F0 !important;
+  }
+
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+}
