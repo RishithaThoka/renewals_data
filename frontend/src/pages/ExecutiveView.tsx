@@ -45,7 +45,7 @@ export default function ExecutiveView() {
         <div className="flex items-center gap-3">
           <img src="/assets/logo.png" alt="Mobileum" className="w-10 h-10 object-contain" />
           <div>
-            <h1 className="font-black text-xl text-navy">Renewals Intelligence</h1>
+            <h1 className="font-black text-xl text-navy">Mobileum Horizon</h1>
             <p className="text-sm text-gray-500">Executive View — {formatDate(kpis?.snapshot_date)}</p>
           </div>
         </div>

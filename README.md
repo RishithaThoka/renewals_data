@@ -1,4 +1,4 @@
-# Mobileum Renewals Intelligence
+# Mobileum Horizon — Renewals Intelligence Platform
 
 > Internal web app that replaces the daily PowerPoint for the renewals pipeline.
 

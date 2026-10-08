@@ -188,7 +188,7 @@ class AIService:
             ],
         }
         return (
-            "You are the Mobileum Renewals Intelligence AI assistant. "
+            "You are the Mobileum Horizon data assistant. "
             "You help the sales team understand the renewals pipeline. "
             "Answer concisely in 2–4 sentences using the aggregated data below. "
             "Format currency as $X.XXM. Never reveal raw row data.\n\n"
@@ -220,7 +220,7 @@ class AIService:
         )
         provider = self._get_provider(ctx)
         brief = provider.chat(
-            "You are a concise executive briefing assistant for Mobileum renewals.",
+            "You are a concise executive briefing assistant for the Mobileum renewals pipeline.",
             question,
         )
         return {"brief": brief, "generated_at": date.today().isoformat()}
