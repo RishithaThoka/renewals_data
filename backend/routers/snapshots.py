@@ -116,7 +116,7 @@ def get_snapshot(snapshot_id: str, db: Session = Depends(get_db), ctx: UserConte
 
 
 @router.post("/validate")
-async def validate_upload(
+def validate_upload(
     data_as_of_date: str = Form(...),
     yesterday_date: Optional[str] = Form(None),
     comparison_tool: UploadFile = File(...),
@@ -126,10 +126,7 @@ async def validate_upload(
     db: Session = Depends(get_db),
     ctx: UserContext = Depends(get_user_context),
 ):
-    """
-    Validate uploaded files, compute preview metrics and reconciliation warnings.
-    Does NOT save to database.
-    """
+    """Validate uploaded files, compute preview metrics and reconciliation warnings. Does NOT save to database."""
     try:
         as_of = date.fromisoformat(data_as_of_date)
     except ValueError:
@@ -145,16 +142,13 @@ async def validate_upload(
 
     tmpdir = tempfile.mkdtemp()
     tmp = Path(tmpdir)
-
     files_dict: dict[str, Path] = {}
 
-    # Save Comparison Tool
     ct_path = tmp / comparison_tool.filename
     with ct_path.open("wb") as f:
         shutil.copyfileobj(comparison_tool.file, f)
     files_dict["comparison_tool"] = ct_path
 
-    # Save optional summary files
     if fiscal_2026:
         f26_path = tmp / fiscal_2026.filename
         with f26_path.open("wb") as f:
@@ -185,9 +179,7 @@ def commit_upload(
     db: Session = Depends(get_db),
     ctx: UserContext = Depends(get_user_context),
 ):
-    """
-    Atomic commit of previously validated upload session.
-    """
+    """Atomic commit of previously validated upload session."""
     svc = IngestService(db)
     try:
         snap = svc.commit_upload(ctx, session_id, replace=replace)
@@ -227,7 +219,6 @@ async def upload_files_legacy(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-
         snap = None
         if renewals_summary:
             rs_path = tmp / renewals_summary.filename

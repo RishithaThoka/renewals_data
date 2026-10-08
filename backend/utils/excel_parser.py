@@ -10,52 +10,34 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from datetime import date, datetime, timedelta
 
 
 # ---------------------------------------------------------------------------
 # Column name → canonical attribute name mapping
 # ---------------------------------------------------------------------------
 RENEWALS_COLUMN_MAP: dict[str, str] = {
-    # Natural key
     "opportunity id 18 digit": "opportunity_id_18",
-
-    # Core deal fields
     "opportunity name":         "opportunity_name",
     "account name":             "account_name",
-
-    # Regions
     "sub-region":               "sub_region",
     "revised sub-region":       "revised_sub_region",
     "country: territory name":  "country_territory",
     "country / territory":      "country_territory",
-
-    # BU
     "business unit":            "business_unit_raw",
-
-    # Forecast
     "forecast category":        "forecast_category",
     "forecast acv amount":      "forecast_acv_amount",
-
-    # Dates
     "close date":               "close_date",
     "last modified date":       "last_modified_date",
-
-    # Probability & approval
     "probability (%)":          "probability_pct",
     "opportunity approval status": "approval_status",
     "approval status":          "approval_status",
-
-    # Expiry & timing
     "service expiry period":    "service_expiry_period",
     "closing year":             "closing_year",
     "fiscal period":            "fiscal_period",
     "renewal category":         "renewal_category",
-
-    # Months delayed (newline collapsed to space)
     "months delayed (working)": "months_delayed",
     "months\ndelayed (working)": "months_delayed",
-
-    # Owner & sales/stage
     "opportunity owner":        "opportunity_owner",
     "sales type":               "sales_type",
     "stage number":             "stage_number",
@@ -65,25 +47,67 @@ RENEWALS_COLUMN_MAP: dict[str, str] = {
 RAW_DATA_SHEETS = ["Today_Data", "Yesterday_Data", "Lastweek_Data"]
 
 COMPARISON_SHEETS = [
-    "FinalChangeReport",
-    "ACVChanges",
-    "TodayForecastSummary",
-    "YesterdayForecastSummary",
-    "ForecastMovementSummary",
-    "OpportunityStatus",
-    "ApprovalStatusChanges",
-    "ServiceExpiryChanges",
-    "RenewalCategoryChanges",
-    "RegionChanges",
-    "ForecastChanges",
-    "comparison",
-    "today",
-    "yesterday",
+    "FinalChangeReport", "ACVChanges", "TodayForecastSummary",
+    "YesterdayForecastSummary", "ForecastMovementSummary", "OpportunityStatus",
+    "ApprovalStatusChanges", "ServiceExpiryChanges", "RenewalCategoryChanges",
+    "RegionChanges", "ForecastChanges", "comparison", "today", "yesterday",
 ]
+
+# ---------------------------------------------------------------------------
+# Robust value parsing
+# ---------------------------------------------------------------------------
+_EXCEL_EPOCH = datetime(1899, 12, 30)
+
+
+def parse_excel_datetime(val) -> datetime | None:
+    """Convert any date-like cell value to datetime, or None.
+    Handles Timestamp/datetime/date, Excel serial numbers, ISO and US text.
+    Zero/blank/"nan" are treated as missing."""
+    if val is None:
+        return None
+    if isinstance(val, pd.Timestamp):
+        return None if pd.isna(val) else val.to_pydatetime()
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, date):
+        return datetime(val.year, val.month, val.day)
+    if isinstance(val, float) and pd.isna(val):
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "nat", "none", "0", "0.0"):
+        return None
+    # Excel serial number (plausible range 1950-2100)
+    if re.fullmatch(r"\d{4,6}(\.\d+)?", s):
+        n = float(s)
+        if 18000 <= n <= 73415:
+            return _EXCEL_EPOCH + timedelta(days=n)
+        return None
+    try:
+        ts = pd.to_datetime(s, errors="coerce")
+        return None if pd.isna(ts) else ts.to_pydatetime()
+    except Exception:
+        return None
+
+
+def parse_excel_date(val) -> date | None:
+    dt = parse_excel_datetime(val)
+    return dt.date() if dt else None
+
+
+def clean_record(rec: dict) -> dict:
+    """Make a row dict JSON-safe: NaN/NaT -> None, Timestamps -> ISO strings."""
+    out = {}
+    for k, v in rec.items():
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            out[str(k)] = None
+        elif isinstance(v, (pd.Timestamp, datetime, date)):
+            out[str(k)] = v.isoformat()
+        else:
+            out[str(k)] = v
+    return out
 
 
 def compute_file_sha256(path: Path) -> str:
-    """Calculate SHA-256 hash of a file."""
     h = hashlib.sha256()
     with path.open("rb") as f:
         while chunk := f.read(65536):
@@ -92,12 +116,10 @@ def compute_file_sha256(path: Path) -> str:
 
 
 def _normalise_col(col: str) -> str:
-    """Lowercase + strip + collapse whitespace for fuzzy matching."""
-    return re.sub(r"\s+", " ", str(col).strip().lower())
+    return re.sub(r"\s+", " ", str(col).replace("\u00a0", " ").strip().lower())
 
 
 def _map_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename columns from raw Excel headers to canonical names."""
     rename = {}
     for col in df.columns:
         normed = _normalise_col(col)
@@ -106,32 +128,30 @@ def _map_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=rename)
 
 
-def _read_sheet(path: Path, sheet_name: str, **kwargs) -> pd.DataFrame:
-    """Read one sheet, always returning a DataFrame (empty if sheet missing)."""
+def _open(path: Path) -> pd.ExcelFile:
+    """Open a workbook ONCE; callers reuse the handle for every sheet they need."""
     try:
-        df = pd.read_excel(path, sheet_name=sheet_name, dtype=str, **kwargs)
-        return df
+        return pd.ExcelFile(path)
     except Exception as exc:
-        raise ValueError(f"Cannot read sheet '{sheet_name}' from {path.name}: {exc}") from exc
+        raise ValueError(f"Cannot open {Path(path).name}: {exc}") from exc
+
+
+def _read_sheet(xf: pd.ExcelFile, sheet_name: str, **kwargs) -> pd.DataFrame:
+    """Read one sheet from an already-open workbook as text."""
+    try:
+        return xf.parse(sheet_name, dtype=str, **kwargs)
+    except Exception as exc:
+        raise ValueError(f"Cannot read sheet '{sheet_name}': {exc}") from exc
 
 
 def available_sheets(path: Path) -> list[str]:
-    """Return list of sheet names without loading full data."""
-    xf = pd.ExcelFile(path)
-    return xf.sheet_names
+    return _open(path).sheet_names
 
 
-def detect_file_slot(path: Path) -> tuple[str, str]:
-    """
-    Detect slot by CONTENT and sheet signature:
-    - Comparison Tool: sheets 'today' and 'yesterday'
-    - Summary files: sheet 'Today_Data'
-      - all Fiscal Period == 'Q4-2026' -> 'fiscal_q4'
-      - else all Closing Year == '2027' -> 'fiscal_2027'
-      - else -> 'fiscal_2026'
-    """
+def detect_file_slot(path: Path, xf: pd.ExcelFile | None = None) -> tuple[str, str]:
+    """Detect slot by CONTENT and sheet signature."""
     try:
-        xf = pd.ExcelFile(path)
+        xf = xf or _open(path)
         sheet_names = xf.sheet_names
         sheet_names_lower = {s.lower(): s for s in sheet_names}
     except Exception as exc:
@@ -143,22 +163,23 @@ def detect_file_slot(path: Path) -> tuple[str, str]:
     today_data_sheet = sheet_names_lower.get("today_data")
     if today_data_sheet:
         try:
-            df_head = pd.read_excel(path, sheet_name=today_data_sheet, nrows=50)
-            fp_col = next((c for c in df_head.columns if "fiscal period" in str(c).lower()), None)
-            cy_col = next((c for c in df_head.columns if "closing year" in str(c).lower()), None)
-
-            cols_to_read = [c for c in [fp_col, cy_col] if c]
+            header = xf.parse(today_data_sheet, nrows=0, dtype=str)
+            fp_col = next((c for c in header.columns if "fiscal period" in _normalise_col(c)), None)
+            cy_col = next((c for c in header.columns if "closing year" in _normalise_col(c)), None)
+            cols_to_read = [c for c in (fp_col, cy_col) if c]
             if cols_to_read:
-                df_full = pd.read_excel(path, sheet_name=today_data_sheet, usecols=cols_to_read)
+                df_full = xf.parse(today_data_sheet, usecols=cols_to_read, dtype=str)
                 if fp_col:
                     vals_fp = df_full[fp_col].dropna().astype(str).str.strip().unique()
                     if len(vals_fp) == 1 and vals_fp[0] == "Q4-2026":
                         return "fiscal_q4", "Renewals Summary - Fiscal Q4 (all Fiscal Period = Q4-2026)"
                 if cy_col:
-                    vals_cy = df_full[cy_col].dropna().astype(str).str.replace(".0", "").str.strip().unique()
+                    vals_cy = (
+                        df_full[cy_col].dropna().astype(str)
+                        .str.replace(r"\.0$", "", regex=True).str.strip().unique()
+                    )
                     if len(vals_cy) == 1 and vals_cy[0] == "2027":
                         return "fiscal_2027", "Renewals Summary - Fiscal 2027 (all Closing Year = 2027)"
-
             return "fiscal_2026", "Renewals Summary - Fiscal 2026 (Renewals scope)"
         except Exception:
             return "fiscal_2026", "Renewals Summary (defaulted to Fiscal 2026)"
@@ -166,44 +187,45 @@ def detect_file_slot(path: Path) -> tuple[str, str]:
     return "unknown", f"Unrecognized sheet structure: {sheet_names[:5]}"
 
 
-def parse_comparison_tool(path: Path) -> dict[str, pd.DataFrame]:
-    """
-    Read sheets from the Comparison Tool workbook.
-    Returns dict keyed by sheet name (original and lowercase).
-    'today' and 'yesterday' columns are also mapped to canonical names.
-    """
+COMPARISON_NEEDED = ["today", "yesterday", "finalchangereport"]
+SUMMARY_NEEDED = ["today_data", "yesterday_data", "lastweek_data", "approvalstatus_summary"]
+
+
+def parse_comparison_tool(path: Path, xf: pd.ExcelFile | None = None) -> dict[str, pd.DataFrame]:
+    """Read needed sheets of Comparison Tool workbook (one open, no re-parsing)."""
+    xf = xf or _open(path)
+    lookup = {s.lower(): s for s in xf.sheet_names}
     result: dict[str, pd.DataFrame] = {}
-    sheets_in_wb = available_sheets(path)
-    for sheet in sheets_in_wb:
-        if sheet in COMPARISON_SHEETS or sheet.lower() in ("today", "yesterday"):
-            try:
-                df = _read_sheet(path, sheet)
-                df = df.dropna(how="all")
-            except ValueError:
-                df = pd.DataFrame()
-            result[sheet] = df
-            result[sheet.lower()] = df
-
-    return result
-
-
-def parse_summary_workbook(path: Path) -> dict[str, pd.DataFrame]:
-    """
-    Read raw data sheets ('Today_Data', 'Yesterday_Data', 'Lastweek_Data')
-    and any pivot sheets for reconciliation.
-    """
-    result: dict[str, pd.DataFrame] = {}
-    sheets_in_wb = available_sheets(path)
-    for sheet in sheets_in_wb:
+    for key in COMPARISON_NEEDED:
+        real = lookup.get(key)
+        if real is None:
+            continue
         try:
-            df = _read_sheet(path, sheet)
-            df = df.dropna(how="all")
+            df = _read_sheet(xf, real).dropna(how="all")
         except ValueError:
             df = pd.DataFrame()
-        result[sheet] = df
-        result[sheet.lower()] = df
-
+        result[key] = df
+        result[real] = df
     return result
 
 
+def parse_summary_workbook(path: Path, xf: pd.ExcelFile | None = None) -> dict[str, pd.DataFrame]:
+    """Read raw data sheets and ApprovalStatus_Summary."""
+    xf = xf or _open(path)
+    lookup = {s.lower(): s for s in xf.sheet_names}
+    result: dict[str, pd.DataFrame] = {}
+    for key in SUMMARY_NEEDED:
+        real = lookup.get(key)
+        if real is None:
+            continue
+        try:
+            df = _read_sheet(xf, real).dropna(how="all")
+        except ValueError:
+            df = pd.DataFrame()
+        result[key] = df
+        result[real] = df
+    return result
+
+
+# Legacy alias
 parse_renewals_summary = parse_summary_workbook

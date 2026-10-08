@@ -29,6 +29,10 @@ from backend.utils.excel_parser import (
     parse_comparison_tool,
     parse_summary_workbook,
     parse_renewals_summary,
+    parse_excel_date,
+    parse_excel_datetime,
+    clean_record,
+    _open,
 )
 from backend.utils.normalise import (
     normalise_approval_status,
@@ -40,17 +44,10 @@ from backend.utils.normalise import (
 log = logging.getLogger(__name__)
 
 # Temporary in-memory cache for validated upload sessions
-# {session_id: session_dict}
 _UPLOAD_SESSIONS: dict[str, dict[str, Any]] = {}
 
 
 def compute_previous_working_day(d: date) -> date:
-    """
-    Monday -> Friday (3 days earlier)
-    Tuesday-Friday -> 1 day earlier
-    Sunday -> Friday (2 days earlier)
-    Saturday -> Friday (1 day earlier)
-    """
     weekday = d.weekday()  # Monday=0, Sunday=6
     if weekday == 0:
         return d - timedelta(days=3)
@@ -63,25 +60,16 @@ def compute_previous_working_day(d: date) -> date:
 
 
 def _coerce_date(val) -> date | None:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    if isinstance(val, (date, datetime)):
-        return val.date() if isinstance(val, datetime) else val
-    try:
-        return pd.to_datetime(str(val)).date()
-    except Exception:
-        return None
+    return parse_excel_date(val)
 
 
 def _coerce_datetime(val) -> datetime | None:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    if isinstance(val, datetime):
-        return val
-    try:
-        return pd.to_datetime(str(val)).to_pydatetime()
-    except Exception:
-        return None
+    return parse_excel_datetime(val)
+
+
+# Upload slot name -> scope key used for scope flags/metrics
+SLOT_TO_SCOPE = {"fiscal_2026": "fy2026", "fiscal_2027": "fy2027", "fiscal_q4": "q4_2026"}
+SCOPE_TO_LABEL = {"fy2026": "Fiscal 2026", "fy2027": "Fiscal 2027", "q4_2026": "Fiscal Q4"}
 
 
 def _coerce_float(val) -> float | None:
@@ -121,11 +109,6 @@ class IngestService:
         data_as_of: date,
         yesterday_date: date | None = None,
     ) -> dict[str, Any]:
-        """
-        Validate uploaded files and generate a PREVIEW without saving anything to the DB.
-        files_dict maps requested slot ('comparison_tool', 'fiscal_2026', 'fiscal_2027', 'fiscal_q4')
-        to local temporary file Path.
-        """
         if yesterday_date is None:
             yesterday_date = compute_previous_working_day(data_as_of)
 
@@ -137,28 +120,28 @@ class IngestService:
         comp_path = files_dict.get("comparison_tool")
         if not comp_path or not comp_path.exists():
             errors.append("Renewal Comparison Tool is mandatory but was not uploaded.")
-            return {
-                "errors": errors,
-                "warnings": warnings,
-                "can_commit": False,
-                "session_id": None,
-            }
+            return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
 
         # 2. Check slots, signatures, and SHA-256 hashes
         all_hashes: dict[str, str] = {}
+        xf_cache: dict[str, pd.ExcelFile] = {}
         for slot, path in files_dict.items():
             if not path or not path.exists():
                 continue
             sha = compute_file_sha256(path)
             all_hashes[slot] = sha
 
-            detected_slot, detected_desc = detect_file_slot(path)
+            try:
+                xf_cache[slot] = _open(path)
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            detected_slot, detected_desc = detect_file_slot(path, xf_cache[slot])
             if detected_slot != "unknown" and detected_slot != slot:
                 warnings.append(
                     f"File in slot '{slot}' ({path.name}) appears to be '{detected_slot}': {detected_desc}"
                 )
 
-            # Check if this exact hash was already uploaded to a snapshot
             existing_upload = (
                 self.db.query(UploadedFile)
                 .filter(UploadedFile.sha256_hash == sha)
@@ -177,6 +160,9 @@ class IngestService:
                 "sha256": sha,
             })
 
+        if errors:
+            return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
+
         # Check if snapshot already exists for this date
         existing_snap = (
             self.db.query(UploadSnapshot)
@@ -189,7 +175,6 @@ class IngestService:
                 f"A snapshot already exists for {data_as_of.isoformat()} ({existing_snap.row_count} rows). Confirming will ask to replace."
             )
 
-        # Flag weekend date
         if data_as_of.weekday() in (5, 6):
             warnings.append(
                 f"Data as of date {data_as_of.isoformat()} falls on a weekend ({data_as_of.strftime('%A')})."
@@ -197,7 +182,7 @@ class IngestService:
 
         # 3. Parse Comparison Tool sheets
         try:
-            comp_sheets = parse_comparison_tool(comp_path)
+            comp_sheets = parse_comparison_tool(comp_path, xf_cache.get("comparison_tool"))
         except Exception as exc:
             errors.append(f"Failed to read Comparison Tool: {exc}")
             return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
@@ -213,7 +198,6 @@ class IngestService:
         if errors:
             return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
 
-        # Validate required columns in today sheet
         today_mapped = _map_columns(today_raw)
         if "opportunity_id_18" not in today_mapped.columns:
             errors.append("Comparison Tool 'today' sheet is missing required column 'Opportunity ID 18 Digit'.")
@@ -223,13 +207,11 @@ class IngestService:
         if errors:
             return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
 
-        # Check duplicate IDs within today sheet
         today_ids = today_mapped["opportunity_id_18"].dropna().astype(str).str.strip()
         dupes = today_ids[today_ids.duplicated()].unique()
         if len(dupes) > 0:
             errors.append(f"Comparison Tool 'today' sheet contains duplicate Opportunity IDs: {list(dupes)[:5]}")
 
-        # Check ACV numeric
         acv_series = today_mapped["forecast_acv_amount"].dropna()
         non_numeric_acv = pd.to_numeric(acv_series.astype(str).str.replace(",", "").str.strip(), errors="coerce").isna().sum()
         if non_numeric_acv > 0:
@@ -239,33 +221,33 @@ class IngestService:
             return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
 
         # 4. Parse Summary Workbooks for scope IDs
-        scope_ids: dict[str, set[str]] = {
-            "fy2026": set(),
-            "fy2027": set(),
-            "q4_2026": set(),
-        }
-        scope_available: dict[str, bool] = {
-            "fy2026": False,
-            "fy2027": False,
-            "q4_2026": False,
-        }
+        scope_ids: dict[str, set[str]] = {"fy2026": set(), "fy2027": set(), "q4_2026": set()}
+        scope_available: dict[str, bool] = {"fy2026": False, "fy2027": False, "q4_2026": False}
 
         summary_dfs: dict[str, dict[str, pd.DataFrame]] = {}
         for slot in ["fiscal_2026", "fiscal_2027", "fiscal_q4"]:
             slot_path = files_dict.get(slot)
             if slot_path and slot_path.exists():
+                scope_key = SLOT_TO_SCOPE[slot]
                 try:
-                    s_sheets = parse_summary_workbook(slot_path)
+                    s_sheets = parse_summary_workbook(slot_path, xf_cache.get(slot))
                     summary_dfs[slot] = s_sheets
                     td = s_sheets.get("today_data")
-                    if td is not None and not td.empty:
+                    if td is None or td.empty:
+                        warnings.append(
+                            f"{slot_path.name}: sheet 'Today_Data' is missing or empty, so {SCOPE_TO_LABEL[scope_key]} is not available."
+                        )
+                    else:
                         td_mapped = _map_columns(td)
-                        if "opportunity_id_18" in td_mapped.columns:
+                        if "opportunity_id_18" not in td_mapped.columns:
+                            warnings.append(
+                                f"{slot_path.name}: column 'Opportunity ID 18 Digit' not found in Today_Data, so {SCOPE_TO_LABEL[scope_key]} is not available."
+                            )
+                        else:
                             ids = set(td_mapped["opportunity_id_18"].dropna().astype(str).str.strip())
-                            scope_ids[slot] = ids
-                            scope_available[slot] = True
+                            scope_ids[scope_key] = ids
+                            scope_available[scope_key] = True
 
-                            # Check Sales Type == 'Renewals'
                             if "sales_type" in td_mapped.columns:
                                 non_renewals = td_mapped[td_mapped["sales_type"].astype(str).str.strip().str.lower() != "renewals"]
                                 if not non_renewals.empty:
@@ -273,18 +255,13 @@ class IngestService:
                                         f"{slot_path.name} contains {len(non_renewals)} rows with Sales Type other than 'Renewals'."
                                     )
 
-                            # Reconcile against ApprovalStatus_Summary if present
                             appr_sheet = s_sheets.get("approvalstatus_summary")
                             if appr_sheet is not None and not appr_sheet.empty:
                                 try:
                                     gt_row = appr_sheet[appr_sheet.iloc[:, 0].astype(str).str.strip().str.lower() == "grand total"]
                                     if not gt_row.empty:
-                                        # Compare total count / ACV
                                         sheet_cnt = float(gt_row.iloc[0, 1]) if len(gt_row.columns) > 1 else None
-                                        sheet_acv = float(gt_row.iloc[0, 2]) if len(gt_row.columns) > 2 else None
                                         computed_cnt = len(td_mapped)
-                                        computed_acv = float(td_mapped["forecast_acv_amount"].astype(float).sum()) if "forecast_acv_amount" in td_mapped.columns else 0.0
-
                                         if sheet_cnt and abs(sheet_cnt - computed_cnt) > 0:
                                             warnings.append(
                                                 f"{slot_path.name}: computed row count ({computed_cnt}) differs from ApprovalStatus_Summary ({int(sheet_cnt)})."
@@ -294,11 +271,9 @@ class IngestService:
                 except Exception as exc:
                     warnings.append(f"Warning reading {slot_path.name}: {exc}")
 
-        # Renewals scope = union of the three scopes
         renewals_ids = scope_ids["fy2026"].union(scope_ids["fy2027"]).union(scope_ids["q4_2026"])
         renewals_available = any(scope_available.values())
 
-        # Check summary file IDs not found in comparison tool
         all_comp_ids = set(today_ids)
         missing_ids = renewals_ids - all_comp_ids
         if missing_ids:
@@ -306,7 +281,7 @@ class IngestService:
                 f"{len(missing_ids)} Opportunity IDs present in summary files were not found in Comparison Tool today sheet."
             )
 
-        # 5. Compute Scope Metrics (Raw vs Active)
+        # 5. Compute Scope Metrics
         stage_col = next((c for c in today_mapped.columns if c in ("stage_number", "stage")), None)
 
         def _metrics_for(ids: set[str] | None):
@@ -316,17 +291,14 @@ class IngestService:
                 sub = today_mapped[today_mapped["opportunity_id_18"].astype(str).str.strip().isin(ids)]
             raw_cnt = len(sub)
             raw_acv = float(sub["forecast_acv_amount"].astype(float).sum()) if "forecast_acv_amount" in sub.columns else 0.0
-
             if stage_col:
                 del_mask = sub[stage_col].astype(str).str.strip().isin(["Deleted", "Lost"])
                 active_sub = sub[~del_mask]
             else:
                 active_sub = sub
-
             active_cnt = len(active_sub)
             active_acv = float(active_sub["forecast_acv_amount"].astype(float).sum()) if "forecast_acv_amount" in active_sub.columns else 0.0
             deleted_lost_cnt = raw_cnt - active_cnt
-
             return {
                 "raw_count": raw_cnt,
                 "raw_acv": round(raw_acv, 2),
@@ -335,35 +307,32 @@ class IngestService:
                 "deleted_lost_count": deleted_lost_cnt,
             }
 
+        EMPTY = {"raw_count": None, "raw_acv": None, "active_count": None, "active_acv": None, "deleted_lost_count": None}
+
         scopes_summary = {
-            "all": {
-                **_metrics_for(None),
-                "available": True,
-                "label": "All Opportunities",
-            },
+            "all": {**_metrics_for(None), "available": True, "label": "All Opportunities"},
             "renewals": {
-                **(_metrics_for(renewals_ids) if renewals_available else {"raw_count": None, "raw_acv": None, "active_count": None, "active_acv": None}),
+                **(_metrics_for(renewals_ids) if renewals_available else EMPTY),
                 "available": renewals_available,
                 "label": "Renewals (Union)",
             },
             "fy2026": {
-                **(_metrics_for(scope_ids["fy2026"]) if scope_available["fy2026"] else {"raw_count": None, "raw_acv": None, "active_count": None, "active_acv": None}),
+                **(_metrics_for(scope_ids["fy2026"]) if scope_available["fy2026"] else EMPTY),
                 "available": scope_available["fy2026"],
                 "label": "Fiscal 2026",
             },
             "fy2027": {
-                **(_metrics_for(scope_ids["fy2027"]) if scope_available["fy2027"] else {"raw_count": None, "raw_acv": None, "active_count": None, "active_acv": None}),
+                **(_metrics_for(scope_ids["fy2027"]) if scope_available["fy2027"] else EMPTY),
                 "available": scope_available["fy2027"],
                 "label": "Fiscal 2027",
             },
             "q4_2026": {
-                **(_metrics_for(scope_ids["q4_2026"]) if scope_available["q4_2026"] else {"raw_count": None, "raw_acv": None, "active_count": None, "active_acv": None}),
+                **(_metrics_for(scope_ids["q4_2026"]) if scope_available["q4_2026"] else EMPTY),
                 "available": scope_available["q4_2026"],
                 "label": "Fiscal Q4",
             },
         }
 
-        # Check row count movement vs previous snapshot in DB (>5%)
         prev_snap = (
             self.db.query(UploadSnapshot)
             .filter(UploadSnapshot.snapshot_date < data_as_of)
@@ -377,9 +346,26 @@ class IngestService:
                     f"Row count moved by {diff_pct:.1f}% vs previous snapshot ({prev_snap.snapshot_date}: {prev_snap.row_count} rows -> today: {len(today_mapped)} rows)."
                 )
 
-        # 6. Reconcile FinalChangeReport changes
+        # 6. Reconcile FinalChangeReport
         fcr = comp_sheets.get("finalchangereport")
         fcr_count = len(fcr) if fcr is not None and not fcr.empty else None
+
+        # Cross-checks
+        for key, label in (("renewals", "Renewals"), ("fy2026", "Fiscal 2026"), ("fy2027", "Fiscal 2027"), ("q4_2026", "Fiscal Q4")):
+            sc = scopes_summary[key]
+            if sc["available"] and (sc["raw_count"] or 0) == 0:
+                errors.append(
+                    f"{label} scope matched 0 rows in the Comparison Tool 'today' sheet. "
+                    "Check that the summary files and the Comparison Tool are from the same day."
+                )
+        if scopes_summary["all"]["raw_count"] == 0:
+            errors.append("Comparison Tool 'today' sheet has 0 data rows.")
+        if renewals_available and len(missing_ids) > 0 and len(missing_ids) > 0.2 * max(len(renewals_ids), 1):
+            warnings.append(
+                "More than 20% of the summary-file opportunities are not in the Comparison Tool: the files may be from different days."
+            )
+        if not renewals_available:
+            warnings.append("No summary files were read. Renewals and Fiscal scopes will be unavailable for this snapshot.")
 
         can_commit = len(errors) == 0
         session_id = str(uuid.uuid4())
@@ -399,7 +385,7 @@ class IngestService:
             "renewals_available": renewals_available,
             "scopes_summary": scopes_summary,
             "snapshot_exists": snapshot_exists,
-            "can_commit": can_commit,  # stored so commit can reject failed sessions
+            "can_commit": can_commit,
         }
 
         return {
@@ -419,20 +405,10 @@ class IngestService:
     # Atomic Commit of Upload
     # ------------------------------------------------------------------
 
-    def commit_upload(
-        self,
-        ctx: UserContext,
-        session_id: str,
-        replace: bool = False,
-    ) -> UploadSnapshot:
-        """
-        Commit validated upload in a SINGLE atomic transaction.
-        If replace=True and snapshot exists for date, existing data is replaced.
-        """
+    def commit_upload(self, ctx: UserContext, session_id: str, replace: bool = False) -> UploadSnapshot:
         session_data = _UPLOAD_SESSIONS.get(session_id)
         if not session_data:
             raise ValueError("Upload session expired or invalid. Please re-upload and re-validate files.")
-        # Reject if the session itself had blocking errors (should not happen via UI, but guard against direct API calls)
         if not session_data.get("can_commit", True):
             raise ValueError("Cannot commit: this upload session had validation errors. Please re-validate.")
 
@@ -448,7 +424,6 @@ class IngestService:
         renewals_available: bool = session_data["renewals_available"]
         summary_dfs: dict[str, dict[str, pd.DataFrame]] = session_data["summary_dfs"]
 
-        # Check existing snapshot
         existing = (
             self.db.query(UploadSnapshot)
             .filter(UploadSnapshot.snapshot_date == data_as_of)
@@ -459,7 +434,6 @@ class IngestService:
                 raise ValueError(
                     f"Snapshot already exists for {data_as_of.isoformat()}. Set replace=True to overwrite."
                 )
-            # Remove previous opportunities and files
             self.db.query(Opportunity).filter(Opportunity.snapshot_id == existing.id).delete()
             self.db.query(UploadedFile).filter(UploadedFile.snapshot_id == existing.id).delete()
             self.db.query(DailySummary).filter(DailySummary.snapshot_id == existing.id).delete()
@@ -478,13 +452,11 @@ class IngestService:
             self.db.add(snap)
             self.db.flush()
 
-        # Update active flags
         self.db.query(UploadSnapshot).filter(UploadSnapshot.is_active_today == True).update(  # noqa: E712
             {"is_active_today": False}
         )
         snap.is_active_today = True
 
-        # Check if stored snapshot exactly 7 days earlier exists
         last_week_target = data_as_of - timedelta(days=7)
         real_lw_snap = (
             self.db.query(UploadSnapshot)
@@ -498,7 +470,6 @@ class IngestService:
             snap.last_week_source = "embedded_summary_union"
             snap.last_week_is_partial = True
 
-        # Insert UploadedFile records
         for f_meta in file_metadata:
             uf = UploadedFile(
                 snapshot_id=snap.id,
@@ -511,9 +482,8 @@ class IngestService:
             )
             self.db.add(uf)
 
-        # Insert Opportunity rows from Comparison Tool 'today' sheet
         opp_objects: list[Opportunity] = []
-        raw_rows_dict = today_raw.to_dict(orient="records") if today_raw is not None else []
+        raw_rows_dict = [clean_record(r) for r in today_raw.to_dict(orient="records")] if today_raw is not None else []
 
         active_count = 0
         for i, (_, row) in enumerate(today_mapped.iterrows()):
@@ -525,7 +495,6 @@ class IngestService:
                 "in_q4_2026": (opp_id in scope_ids["q4_2026"]) if scope_available["q4_2026"] else None,
             }
             raw_dict = raw_rows_dict[i] if i < len(raw_rows_dict) else None
-
             opp = self._row_to_opportunity(snap.id, row, scope_flags=flags, raw_row_dict=raw_dict)
             if not opp.is_deleted_or_lost:
                 active_count += 1
@@ -535,7 +504,6 @@ class IngestService:
         snap.row_count = len(opp_objects)
         snap.active_row_count = active_count
 
-        # Ensure yesterday snapshot exists using the uploaded comparison tool's yesterday sheet
         if yesterday_raw is not None and not yesterday_raw.empty:
             existing_yest = (
                 self.db.query(UploadSnapshot)
@@ -552,16 +520,14 @@ class IngestService:
                 self.db.add(yest_snap)
                 self.db.flush()
                 y_mapped = _map_columns(yesterday_raw)
-                y_raw_dict = yesterday_raw.to_dict(orient="records")
+                y_raw_dict = [clean_record(r) for r in yesterday_raw.to_dict(orient="records")]
                 y_opp_objs = []
                 y_active = 0
                 for idx_y, (_, y_row) in enumerate(y_mapped.iterrows()):
                     st = _safe_str(y_row.get("sales_type"))
                     y_flags = {
                         "in_renewals": (st == "Renewals") if st else False,
-                        "in_fy2026": None,
-                        "in_fy2027": None,
-                        "in_q4_2026": None,
+                        "in_fy2026": None, "in_fy2027": None, "in_q4_2026": None,
                     }
                     raw_d = y_raw_dict[idx_y] if idx_y < len(y_raw_dict) else None
                     y_opp = self._row_to_opportunity(yest_snap.id, y_row, scope_flags=y_flags, raw_row_dict=raw_d)
@@ -573,12 +539,13 @@ class IngestService:
                 yest_snap.active_row_count = y_active
                 self._build_daily_summaries_multi_scope(yest_snap)
 
-        # If no stored snapshot dated exactly data_as_of - 7 days exists, create partial snapshot from summary files' Lastweek_Data sheets
         if not real_lw_snap and summary_dfs:
             lw_rows = []
             seen_ids = set()
             for slot_name, s_sheets in summary_dfs.items():
-                lw_df = s_sheets.get("Lastweek_Data")
+                lw_df = s_sheets.get("lastweek_data")
+                if lw_df is None:
+                    lw_df = s_sheets.get("Lastweek_Data")
                 if lw_df is not None and not lw_df.empty:
                     lw_m = _map_columns(lw_df)
                     id_col = "opportunity_id_18"
@@ -611,19 +578,13 @@ class IngestService:
                 lw_snap.active_row_count = lw_act
                 self._build_daily_summaries_multi_scope(lw_snap)
 
-        # Build DailySummary for all scopes
         self._build_daily_summaries_multi_scope(snap)
 
-        # Compute yesterday ChangeLog (using comparison tool 'yesterday' sheet)
         if yesterday_raw is not None and not yesterday_raw.empty:
             self._compute_yesterday_changelog(snap, yesterday_raw)
 
-        # Commit atomic transaction
         self.db.commit()
-
-        # Clean up session cache
         _UPLOAD_SESSIONS.pop(session_id, None)
-
         log.info("Committed snapshot %s (%s) with %d rows (%d active)", snap.id, snap.snapshot_date, snap.row_count, snap.active_row_count)
         return snap
 
@@ -638,10 +599,8 @@ class IngestService:
         raw_approval = _safe_str(row.get("approval_status"))
         raw_forecast = _safe_str(row.get("forecast_category"))
         raw_stage = _safe_str(row.get("stage_number")) or _safe_str(row.get("stage"))
-
         flags = scope_flags or {}
         is_del_lost = (raw_stage or "").lower() in ("deleted", "lost")
-
         return Opportunity(
             snapshot_id=snapshot_id,
             opportunity_id_18=_safe_str(row.get("opportunity_id_18")),
@@ -673,13 +632,10 @@ class IngestService:
         )
 
     def _build_daily_summaries_multi_scope(self, snapshot: UploadSnapshot) -> None:
-        """Pre-aggregate key metrics and write to daily_summary table."""
         self.db.query(DailySummary).filter(DailySummary.snapshot_id == snapshot.id).delete()
-
         opps = self.db.query(Opportunity).filter(Opportunity.snapshot_id == snapshot.id).all()
         if not opps:
             return
-
         snap_date = snapshot.snapshot_date
         rows: list[DailySummary] = []
 
@@ -694,11 +650,9 @@ class IngestService:
                 count=int(count),
             )
 
-        # Overall totals
         total_acv = sum(float(o.forecast_acv_amount or 0) for o in opps)
         rows.append(_make("total_acv", "overall", "overall", total_acv, len(opps)))
 
-        # By forecast category
         from collections import defaultdict
         cat_acv: dict[str, float] = defaultdict(float)
         cat_cnt: dict[str, int] = defaultdict(int)
@@ -709,7 +663,6 @@ class IngestService:
         for fc, acv in cat_acv.items():
             rows.append(_make("forecast_acv", "forecast_category", fc, acv, cat_cnt[fc]))
 
-        # By approval status
         appr_acv: dict[str, float] = defaultdict(float)
         appr_cnt: dict[str, int] = defaultdict(int)
         for o in opps:
@@ -722,10 +675,6 @@ class IngestService:
         self.db.bulk_save_objects(rows)
 
     def _compute_yesterday_changelog(self, snapshot: UploadSnapshot, yesterday_df: pd.DataFrame) -> None:
-        """
-        Compare snapshot opportunities vs Comparison Tool 'yesterday' sheet.
-        Tracks new, removed, field changes, and 'Moved to Deleted/Lost'.
-        """
         yesterday_mapped = _map_columns(yesterday_df)
         id_col = "opportunity_id_18"
         if id_col not in yesterday_mapped.columns:
@@ -748,7 +697,6 @@ class IngestService:
         today_opps = self.db.query(Opportunity).filter(Opportunity.snapshot_id == snapshot.id).all()
         t_dict = {o.opportunity_id_18: o for o in today_opps if o.opportunity_id_18}
 
-        # Try to resolve the real "from" snapshot (yesterday DB snapshot if it exists)
         yesterday_snap = (
             self.db.query(UploadSnapshot)
             .filter(UploadSnapshot.snapshot_date == snapshot.yesterday_date)
@@ -763,89 +711,51 @@ class IngestService:
         for opp_id, t_opp in t_dict.items():
             y_opp = y_dict.get(opp_id)
             if y_opp is None:
-                # New deal today (ignore if already Deleted/Lost on arrival)
                 if not t_opp.is_deleted_or_lost:
-                    logs.append(
-                        ChangeLog(
-                            snapshot_from_id=from_snap_id,
-                            snapshot_to_id=snapshot.id,
-                            opportunity_id_18=opp_id,
-                            opportunity_name=t_opp.opportunity_name,
-                            changed_column="opportunity_id_18",
-                            old_value=None,
-                            new_value=opp_id,
-                            opportunity_status="New",
-                            change_type="New Opportunity",
-                        )
-                    )
+                    logs.append(ChangeLog(
+                        snapshot_from_id=from_snap_id, snapshot_to_id=snapshot.id,
+                        opportunity_id_18=opp_id, opportunity_name=t_opp.opportunity_name,
+                        changed_column="opportunity_id_18", old_value=None, new_value=opp_id,
+                        opportunity_status="New", change_type="New Opportunity",
+                    ))
                 continue
 
-            # Deal existed yesterday
-            # Check if moved to Deleted/Lost
             if not y_opp["is_deleted_or_lost"] and t_opp.is_deleted_or_lost:
-                logs.append(
-                    ChangeLog(
-                        snapshot_from_id=from_snap_id,
-                        snapshot_to_id=snapshot.id,
-                        opportunity_id_18=opp_id,
-                        opportunity_name=t_opp.opportunity_name,
-                        changed_column="stage_number",
-                        old_value=y_opp["stage"] or "Active",
-                        new_value=t_opp.stage_number or "Deleted/Lost",
-                        opportunity_status="Existing",
-                        change_type="Moved to Deleted/Lost",
-                    )
-                )
+                logs.append(ChangeLog(
+                    snapshot_from_id=from_snap_id, snapshot_to_id=snapshot.id,
+                    opportunity_id_18=opp_id, opportunity_name=t_opp.opportunity_name,
+                    changed_column="stage_number",
+                    old_value=y_opp["stage"] or "Active", new_value=t_opp.stage_number or "Deleted/Lost",
+                    opportunity_status="Existing", change_type="Moved to Deleted/Lost",
+                ))
 
-            # Check category move
             if y_opp["forecast_category"] != t_opp.forecast_category:
-                logs.append(
-                    ChangeLog(
-                        snapshot_from_id=from_snap_id,
-                        snapshot_to_id=snapshot.id,
-                        opportunity_id_18=opp_id,
-                        opportunity_name=t_opp.opportunity_name,
-                        changed_column="forecast_category",
-                        old_value=y_opp["forecast_category"],
-                        new_value=t_opp.forecast_category,
-                        opportunity_status="Existing",
-                        change_type="Category Change",
-                    )
-                )
+                logs.append(ChangeLog(
+                    snapshot_from_id=from_snap_id, snapshot_to_id=snapshot.id,
+                    opportunity_id_18=opp_id, opportunity_name=t_opp.opportunity_name,
+                    changed_column="forecast_category",
+                    old_value=y_opp["forecast_category"], new_value=t_opp.forecast_category,
+                    opportunity_status="Existing", change_type="Category Change",
+                ))
 
-            # Check ACV change
             if y_opp["acv"] is not None and t_opp.forecast_acv_amount is not None:
                 if abs(y_opp["acv"] - t_opp.forecast_acv_amount) >= Decimal("0.01"):
-                    logs.append(
-                        ChangeLog(
-                            snapshot_from_id=from_snap_id,
-                            snapshot_to_id=snapshot.id,
-                            opportunity_id_18=opp_id,
-                            opportunity_name=t_opp.opportunity_name,
-                            changed_column="forecast_acv_amount",
-                            old_value=str(y_opp["acv"]),
-                            new_value=str(t_opp.forecast_acv_amount),
-                            opportunity_status="Existing",
-                            change_type="ACV Change",
-                        )
-                    )
+                    logs.append(ChangeLog(
+                        snapshot_from_id=from_snap_id, snapshot_to_id=snapshot.id,
+                        opportunity_id_18=opp_id, opportunity_name=t_opp.opportunity_name,
+                        changed_column="forecast_acv_amount",
+                        old_value=str(y_opp["acv"]), new_value=str(t_opp.forecast_acv_amount),
+                        opportunity_status="Existing", change_type="ACV Change",
+                    ))
 
-        # Removed deals
         for opp_id, y_opp in y_dict.items():
             if opp_id not in t_dict and not y_opp["is_deleted_or_lost"]:
-                logs.append(
-                    ChangeLog(
-                        snapshot_from_id=from_snap_id,
-                        snapshot_to_id=snapshot.id,
-                        opportunity_id_18=opp_id,
-                        opportunity_name=y_opp["name"],
-                        changed_column="opportunity_id_18",
-                        old_value=opp_id,
-                        new_value=None,
-                        opportunity_status="Existing",
-                        change_type="Opportunity Removed",
-                    )
-                )
+                logs.append(ChangeLog(
+                    snapshot_from_id=from_snap_id, snapshot_to_id=snapshot.id,
+                    opportunity_id_18=opp_id, opportunity_name=y_opp["name"],
+                    changed_column="opportunity_id_18", old_value=opp_id, new_value=None,
+                    opportunity_status="Existing", change_type="Opportunity Removed",
+                ))
 
         if logs:
             self.db.bulk_save_objects(logs)
@@ -854,14 +764,7 @@ class IngestService:
     # Legacy compatibility methods
     # ------------------------------------------------------------------
 
-    def ingest_renewals_summary(
-        self,
-        ctx: UserContext,
-        path: Path,
-        snapshot_date: date,
-        label: str = "Today",
-    ) -> UploadSnapshot:
-        """Legacy ingest method preserved for tests."""
+    def ingest_renewals_summary(self, ctx: UserContext, path: Path, snapshot_date: date, label: str = "Today") -> UploadSnapshot:
         sheets = parse_renewals_summary(path)
         today_df = sheets.get("today", sheets.get("today_data", sheets.get("Today_Data", pd.DataFrame())))
         if today_df.empty:
@@ -873,19 +776,12 @@ class IngestService:
         if label == "Today":
             self.db.query(UploadSnapshot).update({"is_active_today": False})
 
-        snap = (
-            self.db.query(UploadSnapshot)
-            .filter(UploadSnapshot.snapshot_date == snapshot_date)
-            .first()
-        )
+        snap = self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date == snapshot_date).first()
         if not snap:
             snap = UploadSnapshot(
-                label=label,
-                snapshot_date=snapshot_date,
+                label=label, snapshot_date=snapshot_date,
                 yesterday_date=compute_previous_working_day(snapshot_date),
-                is_active_today=(label == "Today"),
-                source_file_summary=path.name,
-                uploaded_by="system",
+                is_active_today=(label == "Today"), source_file_summary=path.name, uploaded_by="system",
             )
             self.db.add(snap)
             self.db.flush()
@@ -900,12 +796,7 @@ class IngestService:
             rows: list[Opportunity] = []
             for idx_r, (_, r) in enumerate(mapped_df.iterrows()):
                 st = _safe_str(r.get("sales_type"))
-                flags = {
-                    "in_renewals": (st == "Renewals") if st else True,
-                    "in_fy2026": None,
-                    "in_fy2027": None,
-                    "in_q4_2026": None,
-                }
+                flags = {"in_renewals": (st == "Renewals") if st else True, "in_fy2026": None, "in_fy2027": None, "in_q4_2026": None}
                 raw_d = raw_rows_dict[idx_r] if idx_r < len(raw_rows_dict) else None
                 rows.append(self._row_to_opportunity(snap.id, r, scope_flags=flags, raw_row_dict=raw_d))
             self.db.bulk_save_objects(rows)
@@ -913,23 +804,12 @@ class IngestService:
             snap.active_row_count = sum(1 for r in rows if not r.is_deleted_or_lost)
             self._build_daily_summaries_multi_scope(snap)
 
-        # Ingest Yesterday if present in workbook
         yest_df = sheets.get("yesterday", sheets.get("yesterday_data", sheets.get("Yesterday_Data", pd.DataFrame())))
         if not yest_df.empty:
             yest_date = compute_previous_working_day(snapshot_date)
-            yest_snap = (
-                self.db.query(UploadSnapshot)
-                .filter(UploadSnapshot.snapshot_date == yest_date)
-                .first()
-            )
+            yest_snap = self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date == yest_date).first()
             if not yest_snap:
-                yest_snap = UploadSnapshot(
-                    label="Yesterday",
-                    snapshot_date=yest_date,
-                    is_active_today=False,
-                    source_file_summary=path.name,
-                    uploaded_by="system",
-                )
+                yest_snap = UploadSnapshot(label="Yesterday", snapshot_date=yest_date, is_active_today=False, source_file_summary=path.name, uploaded_by="system")
                 self.db.add(yest_snap)
                 self.db.flush()
             y_mapped = _map_columns(yest_df)
@@ -946,23 +826,12 @@ class IngestService:
             yest_snap.active_row_count = sum(1 for r in y_rows if not r.is_deleted_or_lost)
             self._build_daily_summaries_multi_scope(yest_snap)
 
-        # Ingest Last Week if present in workbook
         lw_df = sheets.get("lastweek", sheets.get("lastweek_data", sheets.get("Lastweek_Data", pd.DataFrame())))
         if not lw_df.empty:
             lw_date = snapshot_date - timedelta(days=7)
-            lw_snap = (
-                self.db.query(UploadSnapshot)
-                .filter(UploadSnapshot.snapshot_date == lw_date)
-                .first()
-            )
+            lw_snap = self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date == lw_date).first()
             if not lw_snap:
-                lw_snap = UploadSnapshot(
-                    label="Last Week",
-                    snapshot_date=lw_date,
-                    is_active_today=False,
-                    source_file_summary=path.name,
-                    uploaded_by="system",
-                )
+                lw_snap = UploadSnapshot(label="Last Week", snapshot_date=lw_date, is_active_today=False, source_file_summary=path.name, uploaded_by="system")
                 self.db.add(lw_snap)
                 self.db.flush()
             lw_mapped = _map_columns(lw_df)
@@ -982,13 +851,7 @@ class IngestService:
         self.db.commit()
         return snap
 
-    def ingest_comparison_tool(
-        self,
-        ctx: UserContext,
-        path: Path,
-        snapshot: UploadSnapshot,
-    ) -> None:
-        """Legacy comparison tool ingest preserved for tests."""
+    def ingest_comparison_tool(self, ctx: UserContext, path: Path, snapshot: UploadSnapshot) -> None:
         from backend.services.diff_service import DiffService
         sheets = parse_comparison_tool(path)
         diff_svc = DiffService(self.db)

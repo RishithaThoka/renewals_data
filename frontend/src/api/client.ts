@@ -6,8 +6,15 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-// Automatically attach current global scope and include_deleted_lost to all API calls
+// Automatically attach current global scope and include_deleted_lost to analytics/read endpoints.
+// Upload/commit/validate endpoints are body-only — they must NOT receive scope as a query param.
+const SCOPE_EXCLUDED_PATHS = ['/snapshots/validate', '/snapshots/commit', '/snapshots/upload']
+
 api.interceptors.request.use((config) => {
+  const url = config.url || ''
+  const isExcluded = SCOPE_EXCLUDED_PATHS.some((p) => url.includes(p))
+  if (isExcluded) return config
+
   const state = useAppStore.getState()
   config.params = config.params || {}
   if (!config.params.scope && state.scope) {

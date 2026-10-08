@@ -31,6 +31,14 @@ interface UploadSlotState {
   size: number
 }
 
+// Format a Date using LOCAL calendar fields. (toISOString() converts to UTC, which shifts
+// the date back by one day in time zones ahead of UTC such as India.)
+function formatLocalDate(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
 function getAutoYesterdayDate(asOfStr: string): string {
   if (!asOfStr) return ''
   const d = new Date(asOfStr + 'T00:00:00')
@@ -45,15 +53,15 @@ function getAutoYesterdayDate(asOfStr: string): string {
   }
   const y = new Date(d)
   y.setDate(d.getDate() - daysBack)
-  return y.toISOString().slice(0, 10)
+  return formatLocalDate(y)
 }
 
 export default function Upload() {
   const qc = useQueryClient()
 
   // Dates
-  const [dataAsOf, setDataAsOf] = useState('2026-10-07')
-  const [yesterdayDate, setYesterdayDate] = useState('2026-10-06')
+  const [dataAsOf, setDataAsOf] = useState(formatLocalDate(new Date()))
+  const [yesterdayDate, setYesterdayDate] = useState(getAutoYesterdayDate(formatLocalDate(new Date())))
   const [manualYesterdayEdited, setManualYesterdayEdited] = useState(false)
 
   // 4 Slots
