@@ -1,6 +1,6 @@
 import { Outlet } from 'react-router-dom'
-import GlobalHeader from './GlobalHeader'
-import Footer from './Footer'
+import Sidebar from './Sidebar'
+import Topbar from './Topbar'
 import CommandPalette from './CommandPalette'
 import OpportunityDrawer from '@/components/overview/OpportunityDrawer'
 import AssistantDock from '@/components/assistant/AssistantDock'
@@ -12,7 +12,6 @@ export default function Shell() {
   const selectedOppId = useAppStore(s => s.selectedOppId)
   const setSelectedOppId = useAppStore(s => s.setSelectedOppId)
 
-  // Global Cmd+K / Ctrl+K shortcut
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -25,20 +24,14 @@ export default function Shell() {
   }, [setOpen])
 
   return (
-    <div
-      className="flex flex-col min-h-screen"
-      style={{ background: 'var(--bg-primary)' }}
-    >
-      <GlobalHeader />
-
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-6">
+    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
+      <Sidebar />
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        <Topbar />
+        <main className="flex-1 overflow-y-auto p-6">
           <Outlet />
-        </div>
-      </main>
-
-      <Footer />
-
+        </main>
+      </div>
       <CommandPalette />
       <OpportunityDrawer oppId={selectedOppId} onClose={() => setSelectedOppId(null)} />
       <AssistantDock />

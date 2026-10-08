@@ -1,12 +1,4 @@
-# Mobileum Horizon — Progress Log
-
-## 2026-10-09 — Global Shell & Rebranding
-- **Name Change**: Renamed the product to "Mobileum Horizon" everywhere. Updated `config.py` `APP_TITLE`, frontend `index.html` title and metadata, `LoadingScreen.tsx`, AI prompts, and Executive View.
-- **Global Header**: Replaced the sidebar and topbar with a new sticky `GlobalHeader.tsx` featuring two rows.
-  - Row 1: Logo + descriptor, View-as-of, Compare-with, Upload, Search, Exclude toggle, Theme toggle, and a mobile hamburger menu.
-  - Row 2: Horizontal pill tabs for navigation (`Overview`, `Expiry`, `Approvals`, `Business Units`, `Regions`, `Delayed Renewals`, `Data Explorer`), followed by a divider and always-visible right tabs (`Insights`, `Assistant`, `Executive View`). Any overflow is placed into a "More" dropdown.
-- **Footer**: Added a `Footer.tsx` on every page to show data sources, snapshot date, and upload time.
-- **Layout Adjustments**: Updated `Shell.tsx` to use a `max-w-7xl mx-auto` container for content, keeping the application layout clean and centered. Unused `Sidebar.tsx` and `Topbar.tsx` were removed.
+# Mobileum Renewals Intelligence — Progress Log
 
 ## 2026-10-08 — Overview Frontend Rebuild (Tab 1)
 
