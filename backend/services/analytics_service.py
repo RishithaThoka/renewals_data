@@ -17,6 +17,7 @@ from backend.models.opportunity import Opportunity
 from backend.models.snapshot import UploadSnapshot
 from backend.models.daily_summary import DailySummary
 from backend.models.change_log import ChangeLog, ForecastMovementLog
+from backend.services.scopes import ScopeService
 from backend.services.context import UserContext
 from backend.utils.normalise import (
     CANONICAL_FORECAST_CATEGORIES,
@@ -125,13 +126,13 @@ class AnalyticsService:
         # Filter by scope
         s = (scope or "renewals").lower()
         if s == "renewals":
-            q = q.filter(Opportunity.in_renewals == True)
+            q = q.filter(ScopeService.is_renewals())
         elif s == "fy2026":
-            q = q.filter(Opportunity.in_fy2026 == True)
+            q = q.filter(ScopeService.is_renewals(), Opportunity.fiscal_period.in_(["Q1-2026", "Q2-2026", "Q3-2026", "Q4-2026"]))
         elif s == "fy2027":
-            q = q.filter(Opportunity.in_fy2027 == True)
+            q = q.filter(ScopeService.is_renewals(), Opportunity.fiscal_period.in_(["Q1-2027", "Q2-2027", "Q3-2027", "Q4-2027"]))
         elif s == "q4_2026":
-            q = q.filter(Opportunity.in_q4_2026 == True)
+            q = q.filter(ScopeService.current_quarter_slice(snapshot.snapshot_date))
         elif s == "all":
             pass
 

@@ -67,11 +67,8 @@ def _coerce_datetime(val) -> datetime | None:
     return parse_excel_datetime(val)
 
 
-# Upload slot name -> scope key used for scope flags/metrics
-SLOT_TO_SCOPE = {"fiscal_2026": "fy2026", "fiscal_2027": "fy2027", "fiscal_q4": "q4_2026"}
 # Snapshots built from the comparison/summary files of a LATER day (not uploaded as their own day)
 AUTO_SNAPSHOT_SOURCES = ("comparison_tool_yesterday", "summary_lastweek_union")
-SCOPE_TO_LABEL = {"fy2026": "Fiscal 2026", "fy2027": "Fiscal 2027", "q4_2026": "Fiscal Q4"}
 
 
 def _coerce_float(val) -> float | None:
@@ -222,82 +219,30 @@ class IngestService:
         if errors:
             return {"errors": errors, "warnings": warnings, "can_commit": False, "session_id": None}
 
-        # 4. Parse Summary Workbooks for scope IDs
-        scope_ids: dict[str, set[str]] = {"fy2026": set(), "fy2027": set(), "q4_2026": set()}
-        scope_available: dict[str, bool] = {"fy2026": False, "fy2027": False, "q4_2026": False}
-
+        # 4. Parse Summary Workbooks for last-week bootstrap only
         summary_dfs: dict[str, dict[str, pd.DataFrame]] = {}
         for slot in ["fiscal_2026", "fiscal_2027", "fiscal_q4"]:
             slot_path = files_dict.get(slot)
             if slot_path and slot_path.exists():
-                scope_key = SLOT_TO_SCOPE[slot]
                 try:
                     s_sheets = parse_summary_workbook(slot_path, xf_cache.get(slot))
                     summary_dfs[slot] = s_sheets
-                    td = s_sheets.get("today_data")
-                    if td is None or td.empty:
-                        warnings.append(
-                            f"{slot_path.name}: sheet 'Today_Data' is missing or empty, so {SCOPE_TO_LABEL[scope_key]} is not available."
-                        )
-                    else:
-                        td_mapped = _map_columns(td)
-                        if "opportunity_id_18" not in td_mapped.columns:
-                            warnings.append(
-                                f"{slot_path.name}: column 'Opportunity ID 18 Digit' not found in Today_Data, so {SCOPE_TO_LABEL[scope_key]} is not available."
-                            )
-                        else:
-                            ids = set(td_mapped["opportunity_id_18"].dropna().astype(str).str.strip())
-                            scope_ids[scope_key] = ids
-                            scope_available[scope_key] = True
-
-                            if "sales_type" in td_mapped.columns:
-                                non_renewals = td_mapped[td_mapped["sales_type"].astype(str).str.strip().str.lower() != "renewals"]
-                                if not non_renewals.empty:
-                                    warnings.append(
-                                        f"{slot_path.name} contains {len(non_renewals)} rows with Sales Type other than 'Renewals'."
-                                    )
-
-                            appr_sheet = s_sheets.get("approvalstatus_summary")
-                            if appr_sheet is not None and not appr_sheet.empty:
-                                try:
-                                    gt_row = appr_sheet[appr_sheet.iloc[:, 0].astype(str).str.strip().str.lower() == "grand total"]
-                                    if not gt_row.empty:
-                                        sheet_cnt = float(gt_row.iloc[0, 1]) if len(gt_row.columns) > 1 else None
-                                        computed_cnt = len(td_mapped)
-                                        if sheet_cnt and abs(sheet_cnt - computed_cnt) > 0:
-                                            warnings.append(
-                                                f"{slot_path.name}: computed row count ({computed_cnt}) differs from ApprovalStatus_Summary ({int(sheet_cnt)})."
-                                            )
-                                except Exception:
-                                    pass
                 except Exception as exc:
                     warnings.append(f"Warning reading {slot_path.name}: {exc}")
 
-        renewals_ids = scope_ids["fy2026"].union(scope_ids["fy2027"]).union(scope_ids["q4_2026"])
-        renewals_available = any(scope_available.values())
-
-        all_comp_ids = set(today_ids)
-        missing_ids = renewals_ids - all_comp_ids
-        if missing_ids:
-            warnings.append(
-                f"{len(missing_ids)} Opportunity IDs present in summary files were not found in Comparison Tool today sheet."
-            )
-
-        # 5. Compute Scope Metrics
+# 5. Compute Scope Metrics
+        from backend.services.scopes import ScopeService
+        
         stage_col = next((c for c in today_mapped.columns if c in ("stage_number", "stage")), None)
 
-        def _metrics_for(ids: set[str] | None):
-            if ids is None:
-                sub = today_mapped
-            else:
-                sub = today_mapped[today_mapped["opportunity_id_18"].astype(str).str.strip().isin(ids)]
-            raw_cnt = len(sub)
-            raw_acv = float(sub["forecast_acv_amount"].astype(float).sum()) if "forecast_acv_amount" in sub.columns else 0.0
+        def _metrics_for(df_sub):
+            raw_cnt = len(df_sub)
+            raw_acv = float(df_sub["forecast_acv_amount"].astype(float).sum()) if "forecast_acv_amount" in df_sub.columns else 0.0
             if stage_col:
-                del_mask = sub[stage_col].astype(str).str.strip().isin(["Deleted", "Lost"])
-                active_sub = sub[~del_mask]
+                del_mask = df_sub[stage_col].astype(str).str.strip().isin(["Deleted", "Lost"])
+                active_sub = df_sub[~del_mask]
             else:
-                active_sub = sub
+                active_sub = df_sub
             active_cnt = len(active_sub)
             active_acv = float(active_sub["forecast_acv_amount"].astype(float).sum()) if "forecast_acv_amount" in active_sub.columns else 0.0
             deleted_lost_cnt = raw_cnt - active_cnt
@@ -309,29 +254,24 @@ class IngestService:
                 "deleted_lost_count": deleted_lost_cnt,
             }
 
-        EMPTY = {"raw_count": None, "raw_acv": None, "active_count": None, "active_acv": None, "deleted_lost_count": None}
+        ren_mask = today_mapped.get("sales_type", pd.Series(dtype=str)).astype(str).str.strip() == "Renewals"
+        renewals_df = today_mapped[ren_mask]
+        
+        cq = ScopeService.current_quarter(data_as_of)
+        cq_mask = today_mapped.get("fiscal_period", pd.Series(dtype=str)).astype(str).str.strip() == cq
+        current_quarter_df = renewals_df[renewals_df.index.isin(today_mapped[cq_mask].index)]
 
         scopes_summary = {
-            "all": {**_metrics_for(None), "available": True, "label": "All Opportunities"},
+            "all": {**_metrics_for(today_mapped), "available": True, "label": "All Opportunities"},
             "renewals": {
-                **(_metrics_for(renewals_ids) if renewals_available else EMPTY),
-                "available": renewals_available,
-                "label": "Renewals (Union)",
+                **_metrics_for(renewals_df),
+                "available": True,
+                "label": "Renewals",
             },
-            "fy2026": {
-                **(_metrics_for(scope_ids["fy2026"]) if scope_available["fy2026"] else EMPTY),
-                "available": scope_available["fy2026"],
-                "label": "Fiscal 2026",
-            },
-            "fy2027": {
-                **(_metrics_for(scope_ids["fy2027"]) if scope_available["fy2027"] else EMPTY),
-                "available": scope_available["fy2027"],
-                "label": "Fiscal 2027",
-            },
-            "q4_2026": {
-                **(_metrics_for(scope_ids["q4_2026"]) if scope_available["q4_2026"] else EMPTY),
-                "available": scope_available["q4_2026"],
-                "label": "Fiscal Q4",
+            "current_quarter": {
+                **_metrics_for(current_quarter_df),
+                "available": True,
+                "label": ScopeService.quarter_label(cq),
             },
         }
 
@@ -348,27 +288,14 @@ class IngestService:
                     f"Row count moved by {diff_pct:.1f}% vs previous snapshot ({prev_snap.snapshot_date}: {prev_snap.row_count} rows -> today: {len(today_mapped)} rows)."
                 )
 
-        # 6. Reconcile FinalChangeReport
+# 6. Reconcile FinalChangeReport
         fcr = comp_sheets.get("finalchangereport")
         fcr_count = len(fcr) if fcr is not None and not fcr.empty else None
 
         # Cross-checks
-        for key, label in (("renewals", "Renewals"), ("fy2026", "Fiscal 2026"), ("fy2027", "Fiscal 2027"), ("q4_2026", "Fiscal Q4")):
-            sc = scopes_summary[key]
-            if sc["available"] and (sc["raw_count"] or 0) == 0:
-                errors.append(
-                    f"{label} scope matched 0 rows in the Comparison Tool 'today' sheet. "
-                    "Check that the summary files and the Comparison Tool are from the same day."
-                )
         if scopes_summary["all"]["raw_count"] == 0:
             errors.append("Comparison Tool 'today' sheet has 0 data rows.")
-        if renewals_available and len(missing_ids) > 0 and len(missing_ids) > 0.2 * max(len(renewals_ids), 1):
-            warnings.append(
-                "More than 20% of the summary-file opportunities are not in the Comparison Tool: the files may be from different days."
-            )
-        if not renewals_available:
-            warnings.append("No summary files were read. Renewals and Fiscal scopes will be unavailable for this snapshot.")
-
+        
         can_commit = len(errors) == 0
         session_id = str(uuid.uuid4())
         _UPLOAD_SESSIONS[session_id] = {
@@ -381,10 +308,6 @@ class IngestService:
             "yesterday_raw": yesterday_raw,
             "comp_sheets": comp_sheets,
             "summary_dfs": summary_dfs,
-            "scope_ids": scope_ids,
-            "scope_available": scope_available,
-            "renewals_ids": renewals_ids,
-            "renewals_available": renewals_available,
             "scopes_summary": scopes_summary,
             "snapshot_exists": snapshot_exists,
             "can_commit": can_commit,
@@ -420,10 +343,6 @@ class IngestService:
         today_mapped: pd.DataFrame = session_data["today_mapped"]
         today_raw: pd.DataFrame = session_data["today_raw"]
         yesterday_raw: pd.DataFrame | None = session_data.get("yesterday_raw")
-        scope_ids: dict[str, set[str]] = session_data["scope_ids"]
-        scope_available: dict[str, bool] = session_data["scope_available"]
-        renewals_ids: set[str] = session_data["renewals_ids"]
-        renewals_available: bool = session_data["renewals_available"]
         summary_dfs: dict[str, dict[str, pd.DataFrame]] = session_data["summary_dfs"]
 
         existing = (
@@ -493,12 +412,7 @@ class IngestService:
         active_count = 0
         for i, (_, row) in enumerate(today_mapped.iterrows()):
             opp_id = _safe_str(row.get("opportunity_id_18"))
-            flags = {
-                "in_renewals": (opp_id in renewals_ids) if renewals_available else None,
-                "in_fy2026": (opp_id in scope_ids["fy2026"]) if scope_available["fy2026"] else None,
-                "in_fy2027": (opp_id in scope_ids["fy2027"]) if scope_available["fy2027"] else None,
-                "in_q4_2026": (opp_id in scope_ids["q4_2026"]) if scope_available["q4_2026"] else None,
-            }
+            flags = {}
             raw_dict = raw_rows_dict[i] if i < len(raw_rows_dict) else None
             opp = self._row_to_opportunity(snap.id, row, scope_flags=flags, raw_row_dict=raw_dict)
             if not opp.is_deleted_or_lost:
@@ -508,11 +422,6 @@ class IngestService:
         self.db.bulk_save_objects(opp_objects)
         snap.row_count = len(opp_objects)
         snap.active_row_count = active_count
-
-        # Scope membership for yesterday / last week comes from each summary file's own
-        # Yesterday_Data / Lastweek_Data sheet (same rule as today: the file defines the scope).
-        y_ids, y_avail = self._scope_ids_from_sheet(summary_dfs, "yesterday_data")
-        lw_ids, lw_avail = self._scope_ids_from_sheet(summary_dfs, "lastweek_data")
 
         if yesterday_raw is not None and not yesterday_raw.empty:
             existing_yest = (
@@ -534,16 +443,23 @@ class IngestService:
                     yest_snap = existing_yest
                     self._clear_snapshot_rows(yest_snap.id)
                 y_mapped = _map_columns(yesterday_raw)
-                y_ids_union = set().union(*[y_ids[k] for k, ok in y_avail.items() if ok]) if any(y_avail.values()) else None
-
+                
+                # Ensure sales_type and fiscal_period exist
+                if "sales_type" not in y_mapped.columns:
+                    y_mapped["sales_type"] = "Renewals"
+                if "fiscal_period" not in y_mapped.columns:
+                    from backend.services.scopes import ScopeService
+                    y_mapped["fiscal_period"] = y_mapped["close_date"].apply(
+                        lambda d: ScopeService.quarter_of(parse_excel_date(d)) if pd.notnull(d) else None
+                    )
+                
                 def _y_flags(r):
-                    oid = _safe_str(r.get("opportunity_id_18"))
-                    st = _safe_str(r.get("sales_type"))
-                    f = {k: ((oid in y_ids[k]) if y_avail[k] else None) for k in y_ids}
-                    return {
-                        "in_renewals": (oid in y_ids_union) if y_ids_union is not None else (st == "Renewals"),
-                        "in_fy2026": f["fy2026"], "in_fy2027": f["fy2027"], "in_q4_2026": f["q4_2026"],
-                    }
+                    # We store sales_type and fiscal_period in extra_attributes if they are missing?
+                    # No, _row_to_opportunity uses row.get("sales_type") and row.get("fiscal_period") directly from mapped row.
+                    # We just ensure the row has them. But we can inject them via _row_to_opportunity raw dict or just mapped row.
+                    # _fill_snapshot passes mapped row. We can mutate mapped row or wait, we just return a dict of flags, but we need sales_type and fiscal_period populated.
+                    # Wait, _row_to_opportunity expects them in `row` (pd.Series).
+                    return {}
 
                 self._fill_snapshot(yest_snap, y_mapped, yesterday_raw, _y_flags)
                 self._build_daily_summaries_multi_scope(yest_snap)
@@ -554,7 +470,7 @@ class IngestService:
                 )
                 log.warning(warnings_note)
 
-        if not real_lw_snap and any(lw_avail.values()):
+        if not real_lw_snap:
             lw_rows = []
             seen_ids = set()
             for slot_name, s_sheets in summary_dfs.items():
@@ -583,14 +499,27 @@ class IngestService:
                     self._clear_snapshot_rows(lw_snap.id)
                 lw_df_all = pd.DataFrame(lw_rows).reset_index(drop=True)
 
+                if "sales_type" not in lw_df_all.columns:
+                    lw_df_all["sales_type"] = "Renewals"
+                else:
+                    lw_df_all["sales_type"] = lw_df_all["sales_type"].fillna("Renewals")
+                
+                if "fiscal_period" not in lw_df_all.columns:
+                    from backend.services.scopes import ScopeService
+                    lw_df_all["fiscal_period"] = lw_df_all.get("close_date", pd.Series(dtype=object)).apply(
+                        lambda d: ScopeService.quarter_of(parse_excel_date(d)) if pd.notnull(d) else None
+                    )
+                else:
+                    from backend.services.scopes import ScopeService
+                    def fill_fp(row):
+                        if pd.isna(row.get("fiscal_period")):
+                            d = row.get("close_date")
+                            return ScopeService.quarter_of(parse_excel_date(d)) if pd.notnull(d) else None
+                        return row["fiscal_period"]
+                    lw_df_all["fiscal_period"] = lw_df_all.apply(fill_fp, axis=1)
+
                 def _lw_flags(r):
-                    oid = _safe_str(r.get("opportunity_id_18"))
-                    return {
-                        "in_renewals": True,
-                        "in_fy2026": (oid in lw_ids["fy2026"]) if lw_avail["fy2026"] else None,
-                        "in_fy2027": (oid in lw_ids["fy2027"]) if lw_avail["fy2027"] else None,
-                        "in_q4_2026": (oid in lw_ids["q4_2026"]) if lw_avail["q4_2026"] else None,
-                    }
+                    return {}
 
                 self._fill_snapshot(lw_snap, lw_df_all, None, _lw_flags)
                 self._build_daily_summaries_multi_scope(lw_snap)
@@ -605,21 +534,7 @@ class IngestService:
         log.info("Committed snapshot %s (%s) with %d rows (%d active)", snap.id, snap.snapshot_date, snap.row_count, snap.active_row_count)
         return snap
 
-    def _scope_ids_from_sheet(self, summary_dfs: dict, sheet_key: str):
-        """Opportunity IDs per scope (fy2026/fy2027/q4_2026) from one sheet of each summary file."""
-        ids: dict[str, set[str]] = {"fy2026": set(), "fy2027": set(), "q4_2026": set()}
-        avail: dict[str, bool] = {"fy2026": False, "fy2027": False, "q4_2026": False}
-        for slot, scope_key in SLOT_TO_SCOPE.items():
-            df = (summary_dfs.get(slot) or {}).get(sheet_key)
-            if df is None or df.empty:
-                continue
-            m = _map_columns(df)
-            if "opportunity_id_18" not in m.columns:
-                continue
-            ids[scope_key] = set(m["opportunity_id_18"].dropna().astype(str).str.strip())
-            avail[scope_key] = True
-        return ids, avail
-
+    
     def _clear_snapshot_rows(self, snapshot_id: str) -> None:
         self.db.query(Opportunity).filter(Opportunity.snapshot_id == snapshot_id).delete()
         self.db.query(DailySummary).filter(DailySummary.snapshot_id == snapshot_id).delete()
@@ -673,6 +588,8 @@ class IngestService:
             opportunity_owner=_safe_str(row.get("opportunity_owner")),
             stage_number=raw_stage,
             is_deleted_or_lost=is_del_lost,
+            sales_type=_safe_str(row.get("sales_type")),
+            fiscal_period=_safe_str(row.get("fiscal_period")),
             in_renewals=flags.get("in_renewals"),
             in_fy2026=flags.get("in_fy2026"),
             in_fy2027=flags.get("in_fy2027"),

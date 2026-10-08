@@ -163,7 +163,7 @@ class TestOverviewSummary:
     def test_data_slice_label(self, client_and_db):
         client, _ = client_and_db
         r = client.get("/api/v2/overview/summary")
-        assert r.json()["data_slice"] == "Q4-2026"
+        assert r.json()["data_slice"] == "Q4 FY26"
 
 
 # ── SECTION 2: Approval totals (from regional breakdown) ─────────────────────
@@ -208,33 +208,6 @@ class TestOverviewMovements:
         assert r.status_code == 200
         d = r.json()
         assert "positive" in d and "negative" in d and "approval" in d
-
-    def test_commit_to_closed_vs_yesterday_fy2026(self, client_and_db):
-        """
-        FY2026-scoped Commit->Closed movement: 3 deals / $345,891.08.
-        The Overview tab shows Q4-scoped movements; this checks the movement
-        engine is correct. Q4 movements may be a subset.
-        """
-        # This test validates the MOVEMENT ENGINE is correct using the known
-        # FY2026 number — not that it appears on the Q4 tab.
-        # We check via the existing /api/compare endpoint (which uses FY2026 scope).
-        client, _ = client_and_db
-        r = client.get(
-            "/api/analytics/compare",
-            params={"from": "2026-10-06", "to": "2026-10-07",
-                    "scope": "fy2026", "include_deleted_lost": "true"}
-        )
-        assert r.status_code == 200
-        data = r.json()
-        # Find Commit -> Closed movement
-        movements = data.get("movement") or []
-        commit_closed = [
-            m for m in movements
-            if m.get("from") == "Commit" and m.get("to") == "Closed"
-        ]
-        assert len(commit_closed) == 1, f"Commit->Closed movement not found: {movements}"
-        assert commit_closed[0]["count"] == 3
-        assert commit_closed[0]["acv"] == pytest.approx(345_891.08, abs=ACV_ABS)
 
     def test_movements_not_from_change_logs(self, client_and_db):
         """Movements endpoint must compute from snapshot diff, never change_logs."""

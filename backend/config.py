@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     APP_TITLE: str = "Mobileum Renewals Intelligence"
     APP_VERSION: str = "1.0.0"
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    FISCAL_YEAR_START_MONTH: int = 1
 
 
 settings = Settings()

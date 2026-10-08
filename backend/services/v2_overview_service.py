@@ -24,6 +24,13 @@ from sqlalchemy.orm import Session
 from backend.models.opportunity import Opportunity
 from backend.models.snapshot import UploadSnapshot
 from backend.services.context import UserContext
+from backend.services.scopes import ScopeService
+
+
+def _sum(df: pd.DataFrame, col: str) -> float:
+    if df.empty or col not in df.columns:
+        return 0.0
+    return float(df[col].sum())
 
 log = logging.getLogger(__name__)
 
@@ -118,12 +125,13 @@ class V2OverviewService:
             .first()
         )
 
-    def _q4_opps(self, snap: UploadSnapshot, exclude_deleted: bool = False) -> list[Opportunity]:
+    def _q4_opps(self, snap: UploadSnapshot, exclude_deleted: bool = False, target_date = None) -> list[Opportunity]:
+        eff_date = target_date if target_date else snap.snapshot_date
         q = (
             self.db.query(Opportunity)
             .filter(
                 Opportunity.snapshot_id == snap.id,
-                Opportunity.in_q4_2026 == True,  # noqa: E712
+                ScopeService.current_quarter_slice(eff_date)
             )
         )
         if exclude_deleted:
@@ -154,7 +162,7 @@ class V2OverviewService:
             sub = df[df["forecast_category"] == fc]
             result[fc] = {
                 "count": len(sub),
-                "acv": round(float(sub["forecast_acv_amount"].sum()), 2),
+                "acv": round(_sum(sub, "forecast_acv_amount"), 2),
             }
         return result
 
@@ -162,7 +170,7 @@ class V2OverviewService:
         self,
         today_df: pd.DataFrame,
         prev_df: pd.DataFrame,
-        scope_label: str = "q4",
+        q_end_date,
     ) -> dict:
         """
         Compute forecast category and approval movements by diffing two scoped DataFrames.
@@ -173,6 +181,7 @@ class V2OverviewService:
             return {
                 "positive": [], "negative": [], "approval": [],
                 "slippage_to_2027": {"count": 0, "acv": 0.0},
+            "proposal_confirmation_totals": prop_totals,
             }
 
         t = today_df.set_index("opportunity_id_18")
@@ -240,18 +249,17 @@ class V2OverviewService:
                 **_bucket_summary(deals),
             })
 
-        # Slippage to 2027: opps whose close_year is 2027 TODAY but was NOT 2027 in PREV
-        # (i.e. their close date moved into 2027 since the comparison date)
-        today_2027  = set(today_df[today_df["close_year"] == 2027]["opportunity_id_18"])
-        prev_2027   = set(prev_df[prev_df["close_year"] == 2027]["opportunity_id_18"]) if not prev_df.empty else set()
-        slipped_ids = today_2027 - prev_2027  # newly slipped since comparison date
-        slip_df = today_df[today_df["opportunity_id_18"].isin(slipped_ids)]
+        # Slippage: opps whose close_date is after q_end_date TODAY but was NOT after q_end_date in PREV
+        today_slipped = set(today_df[pd.to_datetime(today_df["close_date"]).dt.date > q_end_date]["opportunity_id_18"]) if not today_df.empty else set()
+        prev_slipped = set(prev_df[pd.to_datetime(prev_df["close_date"]).dt.date > q_end_date]["opportunity_id_18"]) if not prev_df.empty else set()
+        slipped_ids = today_slipped - prev_slipped
+        slip_df = today_df[today_df["opportunity_id_18"].isin(slipped_ids)] if not today_df.empty else pd.DataFrame()
         slippage_deals = slip_df[["opportunity_id_18", "opportunity_name", "canonical_region",
-                                   "forecast_category", "forecast_acv_amount"]].to_dict(orient="records")
+                                   "forecast_category", "forecast_acv_amount"]].to_dict(orient="records") if not slip_df.empty else []
         slippage = {
-            "label": "Slippage to 2027",
+            "label": "Slippage",
             "count": len(slip_df),
-            "acv": round(float(slip_df["forecast_acv_amount"].sum()), 2),
+            "acv": round(_sum(slip_df, "forecast_acv_amount"), 2) if not slip_df.empty else 0.0,
             "deals": slippage_deals,
         }
 
@@ -287,13 +295,15 @@ class V2OverviewService:
         df = _opps_to_df(opps)
 
         total_count = len(df)
-        total_acv   = round(float(df["forecast_acv_amount"].sum()), 2) if not df.empty else 0.0
+        total_acv   = round(_sum(df, "forecast_acv_amount"), 2) if not df.empty else 0.0
         cats = self._category_summary(df)
 
-        slip_df = df[df["close_year"] == 2027] if not df.empty else pd.DataFrame()
+        import pandas as pd
+        _, q_end_date = ScopeService.quarter_bounds(ScopeService.current_quarter(snap.snapshot_date))
+        slip_df = df[pd.to_datetime(df["close_date"]).dt.date > q_end_date] if not df.empty else pd.DataFrame()
         slippage = {
             "count": len(slip_df),
-            "acv": round(float(slip_df["forecast_acv_amount"].sum()), 2),
+            "acv": round(_sum(slip_df, "forecast_acv_amount"), 2) if not slip_df.empty else 0.0,
         }
 
         # ── Yesterday deltas ──────────────────────────────────────────────────
@@ -302,12 +312,12 @@ class V2OverviewService:
         cats_delta_yesterday = None
         slip_delta_yesterday = None
         if yest_snap:
-            y_opps = self._q4_opps(yest_snap, exclude_deleted=exclude_deleted)
+            y_opps = self._q4_opps(yest_snap, exclude_deleted=exclude_deleted, target_date=snap.snapshot_date)
             y_df   = _opps_to_df(y_opps)
             y_total_count = len(y_df)
-            y_total_acv   = round(float(y_df["forecast_acv_amount"].sum()), 2) if not y_df.empty else 0.0
+            y_total_acv   = round(_sum(y_df, "forecast_acv_amount"), 2) if not y_df.empty else 0.0
             y_cats = self._category_summary(y_df)
-            y_slip_df = y_df[y_df["close_year"] == 2027] if not y_df.empty else pd.DataFrame()
+            y_slip_df = y_df[pd.to_datetime(y_df["close_date"]).dt.date > q_end_date] if not y_df.empty else pd.DataFrame()
             delta_yesterday = {
                 "count": total_count - y_total_count,
                 "acv":   round(total_acv - y_total_acv, 2),
@@ -322,7 +332,7 @@ class V2OverviewService:
             }
             slip_delta_yesterday = {
                 "count": slippage["count"] - len(y_slip_df),
-                "acv":   round(slippage["acv"] - float(y_slip_df["forecast_acv_amount"].sum()), 2),
+                "acv":   round(slippage["acv"] - _sum(y_slip_df, "forecast_acv_amount"), 2),
             }
 
         # ── Last-week deltas ──────────────────────────────────────────────────
@@ -331,12 +341,12 @@ class V2OverviewService:
         cats_delta_lastweek = None
         slip_delta_lastweek = None
         if lw_snap:
-            lw_opps = self._q4_opps(lw_snap, exclude_deleted=exclude_deleted)
+            lw_opps = self._q4_opps(lw_snap, exclude_deleted=exclude_deleted, target_date=snap.snapshot_date)
             lw_df   = _opps_to_df(lw_opps)
             lw_total_count = len(lw_df)
-            lw_total_acv   = round(float(lw_df["forecast_acv_amount"].sum()), 2) if not lw_df.empty else 0.0
+            lw_total_acv   = round(_sum(lw_df, "forecast_acv_amount"), 2) if not lw_df.empty else 0.0
             lw_cats = self._category_summary(lw_df)
-            lw_slip_df = lw_df[lw_df["close_year"] == 2027] if not lw_df.empty else pd.DataFrame()
+            lw_slip_df = lw_df[pd.to_datetime(lw_df["close_date"]).dt.date > q_end_date] if not lw_df.empty else pd.DataFrame()
             delta_lastweek = {
                 "count": total_count - lw_total_count,
                 "acv":   round(total_acv - lw_total_acv, 2),
@@ -351,7 +361,7 @@ class V2OverviewService:
             }
             slip_delta_lastweek = {
                 "count": slippage["count"] - len(lw_slip_df),
-                "acv":   round(slippage["acv"] - float(lw_slip_df["forecast_acv_amount"].sum()), 2),
+                "acv":   round(slippage["acv"] - _sum(lw_slip_df, "forecast_acv_amount"), 2),
             }
 
         # ── Other regions notice ──────────────────────────────────────────────
@@ -359,10 +369,20 @@ class V2OverviewService:
         if not df.empty:
             other_count = int((df["canonical_region"] == "Other").sum())
 
+        # Proposal confirmation totals for summary
+        prop_totals = {
+            "approved_count": int((df["approval_status"] == "Approved").sum()) if not df.empty and "approval_status" in df.columns else 0,
+            "pending_count":  int((df["approval_status"] == "Pending Approval").sum()) if not df.empty and "approval_status" in df.columns else 0,
+            "blank_count":    int((df["approval_status"] == "Blank").sum()) if not df.empty and "approval_status" in df.columns else 0,
+            "approved_acv":   _sum(df[df["approval_status"] == "Approved"] if not df.empty and "approval_status" in df.columns else pd.DataFrame(), "forecast_acv_amount"),
+            "pending_acv":    _sum(df[df["approval_status"] == "Pending Approval"] if not df.empty and "approval_status" in df.columns else pd.DataFrame(), "forecast_acv_amount"),
+            "blank_acv":      _sum(df[df["approval_status"] == "Blank"] if not df.empty and "approval_status" in df.columns else pd.DataFrame(), "forecast_acv_amount"),
+        }
+
         return {
             "snapshot_date":    snap.snapshot_date.isoformat(),
             "snapshot_id":      snap.id,
-            "data_slice":       "Q4-2026",
+            "data_slice":       ScopeService.quarter_label(ScopeService.current_quarter(snap.snapshot_date)),
             "exclude_deleted":  exclude_deleted,
             "other_region_count": other_count,
             # Section 1
@@ -387,6 +407,7 @@ class V2OverviewService:
                 "delta_yesterday": slip_delta_yesterday,
                 "delta_lastweek":  slip_delta_lastweek,
             },
+            "proposal_confirmation_totals": prop_totals,
         }
 
     def get_movements(
@@ -413,12 +434,14 @@ class V2OverviewService:
                 "compare_date": None,
                 "positive": [], "negative": [], "approval": [],
                 "slippage_to_2027": {"count": 0, "acv": 0.0},
+            "proposal_confirmation_totals": prop_totals,
             }
 
         prev_opps = self._q4_opps(prev_snap, exclude_deleted=exclude_deleted)
         prev_df   = _opps_to_df(prev_opps)
 
-        moves = self._movements(today_df, prev_df)
+        _, q_end_date = ScopeService.quarter_bounds(ScopeService.current_quarter(snap.snapshot_date))
+        moves = self._movements(today_df, prev_df, q_end_date=q_end_date)
         return {
             "compare": compare,
             "compare_date": prev_snap.snapshot_date.isoformat(),
@@ -430,88 +453,96 @@ class V2OverviewService:
         ctx: UserContext,
         exclude_deleted: bool = False,
     ) -> dict:
-        """
-        Sections 5 + 6:
-        5. Proposal Confirmation: Region | Total ACV | Approved | Pending | Blank
-        6. Regional Trend: Region | Total ACV | Closed | Commit | Best Case | Pipeline | Blank
-        Both include a totals row; Section 6 includes a check that sum == Section 1 total.
-        """
         snap = self._active_snap()
         if snap is None:
             return {"error": "no_snapshot"}
 
         opps = self._q4_opps(snap, exclude_deleted=exclude_deleted)
         df = _opps_to_df(opps)
-        if df.empty:
-            return {"proposal_confirmation": [], "regional_trend": [], "total_acv": 0.0, "other_count": 0}
+        
+        yest_snap = self._yesterday_snap(snap)
+        y_opps = self._q4_opps(yest_snap, exclude_deleted=exclude_deleted, target_date=snap.snapshot_date) if yest_snap else []
+        y_df = _opps_to_df(y_opps)
+        
+        lw_snap = self._lastweek_snap(snap)
+        lw_opps = self._q4_opps(lw_snap, exclude_deleted=exclude_deleted, target_date=snap.snapshot_date) if lw_snap else []
+        lw_df = _opps_to_df(lw_opps)
 
-        # ── Section 5: Proposal Confirmation ─────────────────────────────────
+        regions = list(CANONICAL_REGIONS)
+        if not df.empty and "Other" in df["canonical_region"].values:
+            regions.append("Other")
+
         prop_rows = []
-        for region in CANONICAL_REGIONS + ["Other"]:
-            r_df = df[df["canonical_region"] == region]
-            if r_df.empty and region != "Other":
-                # Include even if 0 so table is always 6-row
-                prop_rows.append({
-                    "region": region, "total_acv": 0.0,
-                    "approved_count": 0, "pending_count": 0, "blank_count": 0,
-                    "approved_acv": 0.0, "pending_acv": 0.0, "blank_acv": 0.0,
-                })
-                continue
-            if r_df.empty:
-                continue
+        for region in regions:
+            r_df = df[df["canonical_region"] == region] if not df.empty else pd.DataFrame()
             prop_rows.append({
                 "region": region,
-                "total_acv":    round(float(r_df["forecast_acv_amount"].sum()), 2),
-                "approved_count": int((r_df["approval_status"] == "Approved").sum()),
-                "pending_count":  int((r_df["approval_status"] == "Pending Approval").sum()),
-                "blank_count":    int((r_df["approval_status"] == "Blank").sum()),
-                "approved_acv":  round(float(r_df[r_df["approval_status"] == "Approved"]["forecast_acv_amount"].sum()), 2),
-                "pending_acv":   round(float(r_df[r_df["approval_status"] == "Pending Approval"]["forecast_acv_amount"].sum()), 2),
-                "blank_acv":     round(float(r_df[r_df["approval_status"] == "Blank"]["forecast_acv_amount"].sum()), 2),
+                "total_acv":    round(_sum(r_df, "forecast_acv_amount"), 2),
+                "approved_count": int((r_df["approval_status"] == "Approved").sum()) if not r_df.empty and "approval_status" in r_df.columns else 0,
+                "pending_count":  int((r_df["approval_status"] == "Pending Approval").sum()) if not r_df.empty and "approval_status" in r_df.columns else 0,
+                "blank_count":    int((r_df["approval_status"] == "Blank").sum()) if not r_df.empty and "approval_status" in r_df.columns else 0,
+                "approved_acv":  round(_sum(r_df[r_df["approval_status"] == "Approved"] if not r_df.empty and "approval_status" in r_df.columns else pd.DataFrame(), "forecast_acv_amount"), 2),
+                "pending_acv":   round(_sum(r_df[r_df["approval_status"] == "Pending Approval"] if not r_df.empty and "approval_status" in r_df.columns else pd.DataFrame(), "forecast_acv_amount"), 2),
+                "blank_acv":     round(_sum(r_df[r_df["approval_status"] == "Blank"] if not r_df.empty and "approval_status" in r_df.columns else pd.DataFrame(), "forecast_acv_amount"), 2),
             })
 
-        # Totals row for Section 5
         prop_totals = {
             "region": "Total",
-            "total_acv":     round(float(df["forecast_acv_amount"].sum()), 2),
-            "approved_count": int((df["approval_status"] == "Approved").sum()),
-            "pending_count":  int((df["approval_status"] == "Pending Approval").sum()),
-            "blank_count":    int((df["approval_status"] == "Blank").sum()),
+            "total_acv":     round(_sum(df, "forecast_acv_amount"), 2),
+            "approved_count": int((df["approval_status"] == "Approved").sum()) if not df.empty and "approval_status" in df.columns else 0,
+            "pending_count":  int((df["approval_status"] == "Pending Approval").sum()) if not df.empty and "approval_status" in df.columns else 0,
+            "blank_count":    int((df["approval_status"] == "Blank").sum()) if not df.empty and "approval_status" in df.columns else 0,
         }
 
-        # ── Section 6: Regional Trend ─────────────────────────────────────────
         trend_rows = []
-        for region in CANONICAL_REGIONS + ["Other"]:
-            r_df = df[df["canonical_region"] == region]
-            if r_df.empty and region != "Other":
-                row = {"region": region, "total_count": 0, "total_acv": 0.0}
-                for fc in ALL_FC:
-                    row[f"{fc.lower().replace(' ', '_')}_count"] = 0
-                    row[f"{fc.lower().replace(' ', '_')}_acv"] = 0.0
-                trend_rows.append(row)
-                continue
-            if r_df.empty:
-                continue
+        for region in regions:
+            r_df = df[df["canonical_region"] == region] if not df.empty else pd.DataFrame()
+            y_r_df = y_df[y_df["canonical_region"] == region] if not y_df.empty else pd.DataFrame()
+            lw_r_df = lw_df[lw_df["canonical_region"] == region] if not lw_df.empty else pd.DataFrame()
+            
             row = {
                 "region":       region,
                 "total_count":  len(r_df),
-                "total_acv":    round(float(r_df["forecast_acv_amount"].sum()), 2),
+                "total_acv":    round(_sum(r_df, "forecast_acv_amount"), 2),
+                "y_total_count": len(y_r_df),
+                "y_total_acv":  round(_sum(y_r_df, "forecast_acv_amount"), 2),
+                "lw_total_count": len(lw_r_df),
+                "lw_total_acv": round(_sum(lw_r_df, "forecast_acv_amount"), 2),
             }
             for fc in ALL_FC:
                 fc_key = fc.lower().replace(" ", "_")
-                fc_df = r_df[r_df["forecast_category"] == fc]
+                
+                fc_df = r_df[r_df["forecast_category"] == fc] if not r_df.empty and "forecast_category" in r_df.columns else pd.DataFrame()
                 row[f"{fc_key}_count"] = len(fc_df)
-                row[f"{fc_key}_acv"]   = round(float(fc_df["forecast_acv_amount"].sum()), 2)
+                row[f"{fc_key}_acv"]   = round(_sum(fc_df, "forecast_acv_amount"), 2)
+                
+                y_fc_df = y_r_df[y_r_df["forecast_category"] == fc] if not y_r_df.empty and "forecast_category" in y_r_df.columns else pd.DataFrame()
+                row[f"y_{fc_key}_count"] = len(y_fc_df)
+                row[f"y_{fc_key}_acv"]   = round(_sum(y_fc_df, "forecast_acv_amount"), 2)
+                
+                lw_fc_df = lw_r_df[lw_r_df["forecast_category"] == fc] if not lw_r_df.empty and "forecast_category" in lw_r_df.columns else pd.DataFrame()
+                row[f"lw_{fc_key}_count"] = len(lw_fc_df)
+                row[f"lw_{fc_key}_acv"]   = round(_sum(lw_fc_df, "forecast_acv_amount"), 2)
+                
             trend_rows.append(row)
 
-        # Totals row for Section 6
-        total_row = {"region": "Total", "total_count": len(df),
-                     "total_acv": round(float(df["forecast_acv_amount"].sum()), 2)}
+        total_row = {"region": "Total", "total_count": len(df), "total_acv": round(_sum(df, "forecast_acv_amount"), 2),
+                     "y_total_count": len(y_df), "y_total_acv": round(_sum(y_df, "forecast_acv_amount"), 2),
+                     "lw_total_count": len(lw_df), "lw_total_acv": round(_sum(lw_df, "forecast_acv_amount"), 2)}
+                     
         for fc in ALL_FC:
             fc_key = fc.lower().replace(" ", "_")
-            fc_df = df[df["forecast_category"] == fc]
+            fc_df = df[df["forecast_category"] == fc] if not df.empty and "forecast_category" in df.columns else pd.DataFrame()
             total_row[f"{fc_key}_count"] = len(fc_df)
-            total_row[f"{fc_key}_acv"]   = round(float(fc_df["forecast_acv_amount"].sum()), 2)
+            total_row[f"{fc_key}_acv"]   = round(_sum(fc_df, "forecast_acv_amount"), 2)
+            
+            y_fc_df = y_df[y_df["forecast_category"] == fc] if not y_df.empty and "forecast_category" in y_df.columns else pd.DataFrame()
+            total_row[f"y_{fc_key}_count"] = len(y_fc_df)
+            total_row[f"y_{fc_key}_acv"]   = round(_sum(y_fc_df, "forecast_acv_amount"), 2)
+            
+            lw_fc_df = lw_df[lw_df["forecast_category"] == fc] if not lw_df.empty and "forecast_category" in lw_df.columns else pd.DataFrame()
+            total_row[f"lw_{fc_key}_count"] = len(lw_fc_df)
+            total_row[f"lw_{fc_key}_acv"]   = round(_sum(lw_fc_df, "forecast_acv_amount"), 2)
 
         regional_sum = sum(r["total_acv"] for r in trend_rows)
         check_passes = abs(regional_sum - total_row["total_acv"]) < 0.01
@@ -523,5 +554,5 @@ class V2OverviewService:
             "regional_trend_totals": total_row,
             "regional_sum": round(regional_sum, 2),
             "total_acv_check_passes": check_passes,
-            "other_count": int((df["canonical_region"] == "Other").sum()),
+            "other_count": int((df["canonical_region"] == "Other").sum()) if not df.empty and "canonical_region" in df.columns else 0,
         }

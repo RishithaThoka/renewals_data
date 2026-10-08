@@ -62,7 +62,11 @@ class Opportunity(Base):
     stage_number: Mapped[str | None] = mapped_column(String(64))
     is_deleted_or_lost: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
-    # Scope membership flags (set by membership in summary files' Today_Data)
+    # Rollover / scoping fields
+    sales_type: Mapped[str | None] = mapped_column(String(128))
+    fiscal_period: Mapped[str | None] = mapped_column(String(64))
+
+    # Scope membership flags (legacy, can be deprecated)
     in_renewals: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     in_fy2026: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     in_fy2027: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
@@ -78,6 +82,9 @@ class Opportunity(Base):
 
     __table_args__ = (
         Index("ix_opp_snapshot_opp_id", "snapshot_id", "opportunity_id_18"),
+        Index("ix_opp_snap_sales_type", "snapshot_id", "sales_type"),
+        Index("ix_opp_snap_fiscal_period", "snapshot_id", "fiscal_period"),
+        Index("ix_opp_snap_service_expiry", "snapshot_id", "service_expiry_period"),
     )
 
     def __repr__(self) -> str:
