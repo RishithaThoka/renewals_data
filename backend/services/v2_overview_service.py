@@ -46,7 +46,7 @@ POSITIVE_MOVES = [
 NEGATIVE_MOVES = [
     ("Commit",     "Best Case"),
     ("Best Case",  "Pipeline"),
-    ("Commit",     "Pipeline"),  # 2-step downgrade shown in the reference
+    # third row is Slippage to 2027 — computed separately, not a FC→FC transition
 ]
 APPROVAL_STATUSES = ["Approved", "Pending Approval", "Blank", "Rejected"]
 
@@ -240,21 +240,29 @@ class V2OverviewService:
                 **_bucket_summary(deals),
             })
 
-        # Slippage to 2027: Q4 opps whose close_date.year == 2027 in TODAY but not in PREV
-        # (or: any Q4 opp where close_date.year == 2027)
-        slip_df = today_df[today_df["close_year"] == 2027]
+        # Slippage to 2027: opps whose close_year is 2027 TODAY but was NOT 2027 in PREV
+        # (i.e. their close date moved into 2027 since the comparison date)
+        today_2027  = set(today_df[today_df["close_year"] == 2027]["opportunity_id_18"])
+        prev_2027   = set(prev_df[prev_df["close_year"] == 2027]["opportunity_id_18"]) if not prev_df.empty else set()
+        slipped_ids = today_2027 - prev_2027  # newly slipped since comparison date
+        slip_df = today_df[today_df["opportunity_id_18"].isin(slipped_ids)]
+        slippage_deals = slip_df[["opportunity_id_18", "opportunity_name", "canonical_region",
+                                   "forecast_category", "forecast_acv_amount"]].to_dict(orient="records")
         slippage = {
+            "label": "Slippage to 2027",
             "count": len(slip_df),
             "acv": round(float(slip_df["forecast_acv_amount"].sum()), 2),
-            "deals": slip_df[["opportunity_id_18", "opportunity_name", "canonical_region",
-                               "forecast_category", "forecast_acv_amount"]].to_dict(orient="records"),
+            "deals": slippage_deals,
         }
+
+        # Append slippage as the third negative row
+        negative.append(slippage)
 
         return {
             "positive": positive,
             "negative": negative,
             "approval": approval_moves,
-            "slippage_to_2027": slippage,
+            "slippage_to_2027": slippage,  # kept for backward-compat
         }
 
     # ── public API ────────────────────────────────────────────────────────────

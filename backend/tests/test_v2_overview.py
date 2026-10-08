@@ -89,22 +89,18 @@ def client_and_db(tmp_path_factory):
 
     app.dependency_overrides[get_db] = override_db
 
+    from backend.utils.excel_parser import detect_file_slot
     sample = pathlib.Path("data/sample_oct7")
-    slots = {
-        "fiscal_2026":  "FY26.xlsx",
-        "fiscal_2027":  "FY27.xlsx",
-        "fiscal_q4":    "FY26Q4.xlsx",
-        "comparison_tool": "Comparison.xlsx",
-    }
+    slots = {}
+    for fp in sorted(sample.glob("*.xlsx")):
+        slots[detect_file_slot(fp)[0]] = fp
+    assert set(slots) == {"comparison_tool", "fiscal_2026", "fiscal_2027", "fiscal_q4"}, set(slots)
 
     with TestClient(app) as client:
         # Validate
-        files = []
-        for slot, name in slots.items():
-            fp = sample / name
-            if fp.exists():
-                files.append((slot, (name, open(fp, "rb"),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")))
+        files = [(slot, (fp.name, open(fp, "rb"),
+                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                 for slot, fp in slots.items()]
         data = {"data_as_of_date": "2026-10-07", "yesterday_date": "2026-10-06"}
         vr = client.post("/api/snapshots/validate", data=data, files=files)
         assert vr.status_code == 200, vr.text
@@ -224,17 +220,17 @@ class TestOverviewMovements:
         # We check via the existing /api/compare endpoint (which uses FY2026 scope).
         client, _ = client_and_db
         r = client.get(
-            "/api/compare",
+            "/api/analytics/compare",
             params={"from": "2026-10-06", "to": "2026-10-07",
                     "scope": "fy2026", "include_deleted_lost": "true"}
         )
         assert r.status_code == 200
         data = r.json()
         # Find Commit -> Closed movement
-        movements = data.get("movements") or data.get("forecast_movements") or []
+        movements = data.get("movement") or []
         commit_closed = [
             m for m in movements
-            if m.get("from_category") == "Commit" and m.get("to_category") == "Closed"
+            if m.get("from") == "Commit" and m.get("to") == "Closed"
         ]
         assert len(commit_closed) == 1, f"Commit->Closed movement not found: {movements}"
         assert commit_closed[0]["count"] == 3

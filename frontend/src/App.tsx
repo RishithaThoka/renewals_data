@@ -13,6 +13,7 @@ import History from '@/pages/History'
 import AIAssistant from '@/pages/AIAssistant'
 import ExecutiveView from '@/pages/ExecutiveView'
 import Upload from '@/pages/Upload'
+import DailyChanges from '@/pages/DailyChanges'
 import LoadingScreen from '@/pages/LoadingScreen'
 import DesignSystem from '@/pages/DesignSystem'
 import Insights from '@/pages/Insights'
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/assistant" element={<AIAssistant />} />
           <Route path="/ai" element={<AIAssistant />} />
           <Route path="/upload" element={<Upload />} />
+          <Route path="/daily-changes" element={<DailyChanges />} />
           <Route path="/design" element={<DesignSystem />} />
         </Route>
       </Routes>

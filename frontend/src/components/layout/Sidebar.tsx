@@ -16,6 +16,7 @@ import {
   Palette,
   ShieldAlert,
   Upload,
+  Activity,
 } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import clsx from 'clsx'
@@ -29,8 +30,9 @@ const NAV_ITEMS = [
   { to: '/pipeline', icon: TrendingUp, label: 'Pipeline' },
   { to: '/opportunities', icon: Table2, label: 'Explore' },
   { to: '/insights', icon: ShieldAlert, label: 'Insights' },
-  { to: '/history', icon: History, label: 'History' },
   { to: '/upload', icon: Upload, label: 'Upload' },
+  { to: '/daily-changes', icon: Activity, label: 'Daily Changes' },
+  { to: '/history', icon: History, label: 'History' },
   { to: '/assistant', icon: Sparkles, label: 'Assistant' },
   { to: '/executive', icon: Printer, label: 'Executive', newTab: true },
 ]

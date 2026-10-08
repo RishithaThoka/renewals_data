@@ -102,6 +102,17 @@ export const getRegionsOverview = (snapshotId?: string, compareTo?: string, mode
 export const getHistoryOverview = () =>
   api.get('/analytics/history-overview').then(r => r.data)
 
+// ── V2 Overview (Tab 1) ───────────────────────────────────────────────────────
+
+export const getV2OverviewSummary = (excludeDeleted = false) =>
+  api.get('/v2/overview/summary', { params: { exclude_deleted: excludeDeleted } }).then(r => r.data)
+
+export const getV2OverviewMovements = (compare: 'yesterday' | 'last_week' = 'yesterday', excludeDeleted = false) =>
+  api.get('/v2/overview/movements', { params: { compare, exclude_deleted: excludeDeleted } }).then(r => r.data)
+
+export const getV2RegionalBreakdown = (excludeDeleted = false) =>
+  api.get('/v2/overview/regional-breakdown', { params: { exclude_deleted: excludeDeleted } }).then(r => r.data)
+
 // ── Opportunities ─────────────────────────────────────────────────────────────
 
 export interface OppFilters {
