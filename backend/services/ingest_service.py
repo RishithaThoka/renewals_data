@@ -69,6 +69,8 @@ def _coerce_datetime(val) -> datetime | None:
 
 # Upload slot name -> scope key used for scope flags/metrics
 SLOT_TO_SCOPE = {"fiscal_2026": "fy2026", "fiscal_2027": "fy2027", "fiscal_q4": "q4_2026"}
+# Snapshots built from the comparison/summary files of a LATER day (not uploaded as their own day)
+AUTO_SNAPSHOT_SOURCES = ("comparison_tool_yesterday", "summary_lastweek_union")
 SCOPE_TO_LABEL = {"fy2026": "Fiscal 2026", "fy2027": "Fiscal 2027", "q4_2026": "Fiscal Q4"}
 
 
@@ -458,11 +460,14 @@ class IngestService:
         snap.is_active_today = True
 
         last_week_target = data_as_of - timedelta(days=7)
-        real_lw_snap = (
+        # A snapshot at date-7 is "real" only if it was uploaded as its own day. One that an earlier
+        # upload derived from Lastweek_Data sheets is partial and gets rebuilt from this upload.
+        existing_lw = (
             self.db.query(UploadSnapshot)
             .filter(UploadSnapshot.snapshot_date == last_week_target)
             .first()
         )
+        real_lw_snap = existing_lw if existing_lw and existing_lw.uploaded_by not in AUTO_SNAPSHOT_SOURCES else None
         if real_lw_snap:
             snap.last_week_source = "real_snapshot"
             snap.last_week_is_partial = False
@@ -504,78 +509,90 @@ class IngestService:
         snap.row_count = len(opp_objects)
         snap.active_row_count = active_count
 
+        # Scope membership for yesterday / last week comes from each summary file's own
+        # Yesterday_Data / Lastweek_Data sheet (same rule as today: the file defines the scope).
+        y_ids, y_avail = self._scope_ids_from_sheet(summary_dfs, "yesterday_data")
+        lw_ids, lw_avail = self._scope_ids_from_sheet(summary_dfs, "lastweek_data")
+
         if yesterday_raw is not None and not yesterday_raw.empty:
             existing_yest = (
                 self.db.query(UploadSnapshot)
                 .filter(UploadSnapshot.snapshot_date == yesterday_date)
                 .first()
             )
-            if not existing_yest:
-                yest_snap = UploadSnapshot(
-                    label="Yesterday",
-                    snapshot_date=yesterday_date,
-                    uploaded_by="comparison_tool_yesterday",
-                    is_active_today=False,
-                )
-                self.db.add(yest_snap)
-                self.db.flush()
+            if existing_yest is None or existing_yest.uploaded_by in AUTO_SNAPSHOT_SOURCES:
+                if existing_yest is None:
+                    yest_snap = UploadSnapshot(
+                        label="Yesterday",
+                        snapshot_date=yesterday_date,
+                        uploaded_by="comparison_tool_yesterday",
+                        is_active_today=False,
+                    )
+                    self.db.add(yest_snap)
+                    self.db.flush()
+                else:
+                    yest_snap = existing_yest
+                    self._clear_snapshot_rows(yest_snap.id)
                 y_mapped = _map_columns(yesterday_raw)
-                y_raw_dict = [clean_record(r) for r in yesterday_raw.to_dict(orient="records")]
-                y_opp_objs = []
-                y_active = 0
-                for idx_y, (_, y_row) in enumerate(y_mapped.iterrows()):
-                    st = _safe_str(y_row.get("sales_type"))
-                    y_flags = {
-                        "in_renewals": (st == "Renewals") if st else False,
-                        "in_fy2026": None, "in_fy2027": None, "in_q4_2026": None,
-                    }
-                    raw_d = y_raw_dict[idx_y] if idx_y < len(y_raw_dict) else None
-                    y_opp = self._row_to_opportunity(yest_snap.id, y_row, scope_flags=y_flags, raw_row_dict=raw_d)
-                    if not y_opp.is_deleted_or_lost:
-                        y_active += 1
-                    y_opp_objs.append(y_opp)
-                self.db.bulk_save_objects(y_opp_objs)
-                yest_snap.row_count = len(y_opp_objs)
-                yest_snap.active_row_count = y_active
-                self._build_daily_summaries_multi_scope(yest_snap)
+                y_ids_union = set().union(*[y_ids[k] for k, ok in y_avail.items() if ok]) if any(y_avail.values()) else None
 
-        if not real_lw_snap and summary_dfs:
+                def _y_flags(r):
+                    oid = _safe_str(r.get("opportunity_id_18"))
+                    st = _safe_str(r.get("sales_type"))
+                    f = {k: ((oid in y_ids[k]) if y_avail[k] else None) for k in y_ids}
+                    return {
+                        "in_renewals": (oid in y_ids_union) if y_ids_union is not None else (st == "Renewals"),
+                        "in_fy2026": f["fy2026"], "in_fy2027": f["fy2027"], "in_q4_2026": f["q4_2026"],
+                    }
+
+                self._fill_snapshot(yest_snap, y_mapped, yesterday_raw, _y_flags)
+                self._build_daily_summaries_multi_scope(yest_snap)
+            elif existing_yest.row_count and abs(existing_yest.row_count - len(yesterday_raw)) > 0:
+                warnings_note = (
+                    f"Kept the stored snapshot for {yesterday_date} ({existing_yest.row_count} rows); "
+                    f"the uploaded 'yesterday' sheet has {len(yesterday_raw)} rows."
+                )
+                log.warning(warnings_note)
+
+        if not real_lw_snap and any(lw_avail.values()):
             lw_rows = []
             seen_ids = set()
             for slot_name, s_sheets in summary_dfs.items():
                 lw_df = s_sheets.get("lastweek_data")
-                if lw_df is None:
-                    lw_df = s_sheets.get("Lastweek_Data")
                 if lw_df is not None and not lw_df.empty:
                     lw_m = _map_columns(lw_df)
-                    id_col = "opportunity_id_18"
                     for _, r in lw_m.iterrows():
-                        opp_id = _safe_str(r.get(id_col))
+                        opp_id = _safe_str(r.get("opportunity_id_18"))
                         if opp_id and opp_id not in seen_ids:
                             seen_ids.add(opp_id)
                             lw_rows.append(r)
             if lw_rows:
-                lw_snap = UploadSnapshot(
-                    label="Last Week (Partial)",
-                    snapshot_date=last_week_target,
-                    uploaded_by="summary_lastweek_union",
-                    is_active_today=False,
-                    last_week_source="embedded_summary_union",
-                    last_week_is_partial=True,
-                )
-                self.db.add(lw_snap)
-                self.db.flush()
-                lw_objs = []
-                lw_act = 0
-                for r in lw_rows:
-                    flags = {"in_renewals": True, "in_fy2026": None, "in_fy2027": None, "in_q4_2026": None}
-                    opp = self._row_to_opportunity(lw_snap.id, r, scope_flags=flags)
-                    if not opp.is_deleted_or_lost:
-                        lw_act += 1
-                    lw_objs.append(opp)
-                self.db.bulk_save_objects(lw_objs)
-                lw_snap.row_count = len(lw_objs)
-                lw_snap.active_row_count = lw_act
+                if existing_lw is None:
+                    lw_snap = UploadSnapshot(
+                        label="Last Week (Partial)",
+                        snapshot_date=last_week_target,
+                        uploaded_by="summary_lastweek_union",
+                        is_active_today=False,
+                        last_week_source="embedded_summary_union",
+                        last_week_is_partial=True,
+                    )
+                    self.db.add(lw_snap)
+                    self.db.flush()
+                else:
+                    lw_snap = existing_lw
+                    self._clear_snapshot_rows(lw_snap.id)
+                lw_df_all = pd.DataFrame(lw_rows).reset_index(drop=True)
+
+                def _lw_flags(r):
+                    oid = _safe_str(r.get("opportunity_id_18"))
+                    return {
+                        "in_renewals": True,
+                        "in_fy2026": (oid in lw_ids["fy2026"]) if lw_avail["fy2026"] else None,
+                        "in_fy2027": (oid in lw_ids["fy2027"]) if lw_avail["fy2027"] else None,
+                        "in_q4_2026": (oid in lw_ids["q4_2026"]) if lw_avail["q4_2026"] else None,
+                    }
+
+                self._fill_snapshot(lw_snap, lw_df_all, None, _lw_flags)
                 self._build_daily_summaries_multi_scope(lw_snap)
 
         self._build_daily_summaries_multi_scope(snap)
@@ -587,6 +604,38 @@ class IngestService:
         _UPLOAD_SESSIONS.pop(session_id, None)
         log.info("Committed snapshot %s (%s) with %d rows (%d active)", snap.id, snap.snapshot_date, snap.row_count, snap.active_row_count)
         return snap
+
+    def _scope_ids_from_sheet(self, summary_dfs: dict, sheet_key: str):
+        """Opportunity IDs per scope (fy2026/fy2027/q4_2026) from one sheet of each summary file."""
+        ids: dict[str, set[str]] = {"fy2026": set(), "fy2027": set(), "q4_2026": set()}
+        avail: dict[str, bool] = {"fy2026": False, "fy2027": False, "q4_2026": False}
+        for slot, scope_key in SLOT_TO_SCOPE.items():
+            df = (summary_dfs.get(slot) or {}).get(sheet_key)
+            if df is None or df.empty:
+                continue
+            m = _map_columns(df)
+            if "opportunity_id_18" not in m.columns:
+                continue
+            ids[scope_key] = set(m["opportunity_id_18"].dropna().astype(str).str.strip())
+            avail[scope_key] = True
+        return ids, avail
+
+    def _clear_snapshot_rows(self, snapshot_id: str) -> None:
+        self.db.query(Opportunity).filter(Opportunity.snapshot_id == snapshot_id).delete()
+        self.db.query(DailySummary).filter(DailySummary.snapshot_id == snapshot_id).delete()
+
+    def _fill_snapshot(self, snap: UploadSnapshot, mapped: pd.DataFrame, raw: pd.DataFrame | None, flag_fn) -> None:
+        raw_dicts = [clean_record(r) for r in raw.to_dict(orient="records")] if raw is not None else []
+        objs, active = [], 0
+        for i, (_, row) in enumerate(mapped.iterrows()):
+            raw_d = raw_dicts[i] if i < len(raw_dicts) else None
+            o = self._row_to_opportunity(snap.id, row, scope_flags=flag_fn(row), raw_row_dict=raw_d)
+            if not o.is_deleted_or_lost:
+                active += 1
+            objs.append(o)
+        self.db.bulk_save_objects(objs)
+        snap.row_count = len(objs)
+        snap.active_row_count = active
 
     def _row_to_opportunity(
         self,

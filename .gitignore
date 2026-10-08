@@ -53,3 +53,7 @@ dark_storage.json
 # Logs
 *.log
 logs/
+
+# real customer Excel files used by the e2e test (never commit)
+data/sample_oct7/
+*.xlsx

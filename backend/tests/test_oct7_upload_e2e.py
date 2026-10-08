@@ -129,6 +129,40 @@ def test_commit_and_dashboard_numbers(client_and_db, validated):
     assert count_acv(all_raw)[1] == pytest.approx(451999230.24, abs=0.005)
 
 
+# (count, ACV) per scope for yesterday (2026-10-06) and last week (2026-09-30), taken straight from each
+# summary file's own Yesterday_Data / Lastweek_Data sheet
+EXPECTED_YESTERDAY = {
+    "renewals": (1208, 115301003.89),
+    "fy2026": (1117, 104500958.84),
+    "fy2027": (91, 10800045.05),
+    "q4_2026": (346, 39592770.91),
+}
+EXPECTED_LASTWEEK = {
+    "renewals": (1197, 113573625.84),
+    "fy2026": (1104, 104069908.60),
+    "fy2027": (93, 9503717.24),
+    "q4_2026": (334, 39164857.76),
+}
+
+
+def test_yesterday_and_last_week_are_tagged_by_scope(client_and_db, validated):
+    """Scoped 'vs yesterday' / 'vs last week' needs the earlier snapshots tagged fy2026/fy2027/q4 too."""
+    client, Session = client_and_db
+    from backend.models.snapshot import UploadSnapshot
+    db = Session()
+    try:
+        for snap_date, expected in ((date(2026, 10, 6), EXPECTED_YESTERDAY), (date(2026, 9, 30), EXPECTED_LASTWEEK)):
+            snap = db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date == snap_date).first()
+            assert snap is not None, snap_date
+            for scope, (cnt, acv) in expected.items():
+                flag = getattr(Opportunity, "in_" + scope)
+                rows = db.query(Opportunity).filter(Opportunity.snapshot_id == snap.id, flag == True).all()  # noqa: E712
+                assert len(rows) == cnt, (snap_date, scope)
+                assert sum(float(r.forecast_acv_amount or 0) for r in rows) == pytest.approx(acv, abs=0.005), (snap_date, scope)
+    finally:
+        db.close()
+
+
 def test_same_files_again_ask_to_replace(client_and_db, validated):
     client, _ = client_and_db
     slots = _slot_files()
