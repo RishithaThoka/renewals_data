@@ -339,3 +339,33 @@ export const getInsights = (snapshotId?: string) =>
   api.get('/insights', { params: { snapshot_id: snapshotId } }).then(r => r.data)
 
 export default api
+
+
+// ── V2 Expiry ─────────────────────────────────────────────────────────────
+export const getV2ExpirySummary = async (params: {
+  as_of?: string | null
+  compare?: string | null
+  exclude_deleted_lost?: boolean
+}) => {
+  const p: any = {}
+  if (params.as_of) p.as_of = params.as_of
+  if (params.compare) p.compare = params.compare
+  p.exclude_deleted_lost = params.exclude_deleted_lost
+  const res = await api.get('/v2/expiry/summary', { params: p })
+  return res.data
+}
+
+export const getV2ExpiryDeals = async (params: {
+  quarter?: string
+  category?: string
+  as_of?: string | null
+  exclude_deleted_lost?: boolean
+}) => {
+  const p: any = {}
+  if (params.quarter) p.quarter = params.quarter
+  if (params.category) p.category = params.category
+  if (params.as_of) p.as_of = params.as_of
+  p.exclude_deleted_lost = params.exclude_deleted_lost
+  const res = await api.get('/v2/expiry/deals', { params: p })
+  return res.data
+}

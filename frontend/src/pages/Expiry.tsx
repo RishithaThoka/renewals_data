@@ -1,622 +1,437 @@
-import React, { useState, useMemo } from 'react'
-import { motion } from 'framer-motion'
+import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import {
-  Calendar,
-  Layers,
-  TrendingUp,
-  ArrowUpRight,
-  ArrowDownRight,
-  Filter,
-  DollarSign,
-  Hash,
-  ChevronRight,
-  Sparkles,
-  Info,
-} from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { AlertTriangle, TrendingUp, TrendingDown, X } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
-import { getForecastSummary } from '@/api/client'
-import { formatACV, formatCount, formatDelta } from '@/utils/format'
-import { FORECAST_COLORS, FORECAST_ORDER } from '@/design/tokens'
-import Card from '@/components/ui/Card'
-import SegmentedControl from '@/components/ui/SegmentedControl'
-import Badge from '@/components/ui/Badge'
-import { Skeleton } from '@/components/ui/Skeleton'
-import OpportunitiesListDrawer from '@/components/common/OpportunitiesListDrawer'
+import { getV2ExpirySummary, getV2ExpiryDeals } from '@/api/client'
+import { formatDate } from '@/utils/format'
+import { FORECAST_COLORS } from '@/design/tokens'
 import OpportunityDrawer from '@/components/overview/OpportunityDrawer'
-import clsx from 'clsx'
+import { EmptyState } from '@/components/ui/EmptyState'
 
-const QUARTERS = [
-  'Q1-2026',
-  'Q2-2026',
-  'Q3-2026',
-  'Q4-2026',
-  'Q1-2027',
-  'Q2-2027',
-  'Q3-2027',
-  'Q4-2027',
-]
+function acvM(v: number | null | undefined): string {
+  if (v == null) return '—'
+  const abs = Math.abs(v)
+  const sign = v < 0 ? '-' : ''
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000)     return `${sign}$${(abs / 1_000).toFixed(1)}K`
+  return `${sign}$${abs.toFixed(0)}`
+}
 
-const CATEGORIES = ['Closed', 'Commit', 'Best Case', 'Pipeline']
+function DeltaBadge({ val, label }: { val: number | null | undefined; label?: string }) {
+  if (val == null) return null
+  const up = val >= 0
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+      up ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+         : 'bg-red-500/10 text-red-700 dark:text-red-400'
+    }`}>
+      {up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+      {up ? '+' : ''}{val}{label ? ` ${label}` : ''}
+    </span>
+  )
+}
 
-type ViewMode = 'today' | 'vs_yesterday' | 'vs_lastweek'
-type MetricMode = 'amount' | 'count'
+function AcvDelta({ val }: { val: number | null | undefined }) {
+  if (val == null) return null
+  const up = val >= 0
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+      up ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+         : 'bg-red-500/10 text-red-700 dark:text-red-400'
+    }`}>
+      {up ? '▲' : '▼'} {up ? '+' : ''}{acvM(val)}
+    </span>
+  )
+}
+
+function DealModal({ title, deals, onSelectOpp, onClose }: {
+  title: string; deals: any[]; onSelectOpp: (id: string) => void; onClose: () => void
+}) {
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        style={{ background: 'rgba(0,0,0,0.55)' }}
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+          className="card-premium w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden bg-[var(--bg-primary)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
+            <h3 className="font-display font-bold text-sm">{title}</h3>
+            <button onClick={onClose}><X className="w-4 h-4 text-[var(--text-muted)]" /></button>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {deals.length === 0
+              ? <p className="text-center text-sm text-[var(--text-muted)] py-8">No deals.</p>
+              : (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-[var(--bg-secondary)]">
+                    <tr className="border-b border-[var(--border)]">
+                      <th className="px-4 py-3 text-left font-semibold text-[var(--text-muted)]">Opportunity</th>
+                      <th className="px-4 py-3 text-left font-semibold text-[var(--text-muted)]">Account</th>
+                      <th className="px-4 py-3 text-right font-semibold text-[var(--text-muted)]">ACV</th>
+                      <th className="px-4 py-3 text-center font-semibold text-[var(--text-muted)]">Category</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deals.map(d => (
+                      <tr
+                        key={d.id}
+                        className="border-b border-[var(--border)] hover:bg-[var(--bg-secondary)] cursor-pointer transition-colors"
+                        onClick={() => {
+                          onSelectOpp(d.id)
+                          onClose()
+                        }}
+                      >
+                        <td className="px-4 py-3 font-medium">{d.opportunity_name || d.opportunity_id_18}</td>
+                        <td className="px-4 py-3 text-[var(--text-muted)]">{d.account_name || '-'}</td>
+                        <td className="px-4 py-3 text-right font-medium">{acvM(d.forecast_acv_amount)}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            style={{
+                              backgroundColor: `${FORECAST_COLORS[d.forecast_category as keyof typeof FORECAST_COLORS] || '#cbd5e1'}33`,
+                              color: FORECAST_COLORS[d.forecast_category as keyof typeof FORECAST_COLORS] || '#64748b'
+                            }}
+                          >
+                            {d.forecast_category}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  )
+}
+
+function HeatmapCell({
+  count,
+  acv,
+  maxAcv,
+  onClick,
+  isTotal = false,
+  deltaCount = null,
+  deltaAcv = null,
+}: {
+  count: number
+  acv: number
+  maxAcv: number
+  onClick: () => void
+  isTotal?: boolean
+  deltaCount?: number | null
+  deltaAcv?: number | null
+}) {
+  const ratio = maxAcv > 0 ? acv / maxAcv : 0
+  const bgOpacity = Math.max(0, Math.min(ratio * 0.4, 0.4))
+  
+  return (
+    <td
+      onClick={onClick}
+      className={`px-4 py-4 text-center cursor-pointer transition-all hover:bg-[var(--primary)] hover:bg-opacity-10 ${
+        isTotal ? 'font-bold bg-[var(--bg-secondary)] border-l border-t border-[var(--border)]' : ''
+      }`}
+      style={!isTotal && acv > 0 ? { backgroundColor: `rgba(99, 102, 241, ${bgOpacity})` } : {}}
+    >
+      <div className="flex flex-col items-center justify-center gap-1">
+        <span className="text-lg font-bold text-[var(--text-primary)]">{count}</span>
+        <span className="text-xs text-[var(--text-muted)]">{acvM(acv)}</span>
+        
+        {isTotal && (deltaCount != null || deltaAcv != null) && (
+          <div className="flex items-center gap-1 mt-1">
+            <DeltaBadge val={deltaCount} />
+            <AcvDelta val={deltaAcv} />
+          </div>
+        )}
+      </div>
+    </td>
+  )
+}
+
+function ExpiryGrid({
+  data,
+  yearLabel,
+  maxAcv,
+  categories,
+  deltas,
+  onCellClick
+}: {
+  data: any
+  yearLabel: string
+  maxAcv: number
+  categories: string[]
+  deltas: any
+  onCellClick: (q: string | null, c: string | null, title: string) => void
+}) {
+  if (!data || !data.rows) return null
+  
+  return (
+    <div className="card-premium overflow-hidden mb-8">
+      <div className="px-6 py-4 border-b border-[var(--border)] bg-[var(--bg-secondary)] flex justify-between items-center">
+        <h2 className="font-display font-bold text-lg text-[var(--text-primary)]">FY {yearLabel} Expiry</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-[var(--border)] bg-[var(--bg-secondary)]">
+              <th className="px-4 py-3 text-left font-semibold text-[var(--text-muted)] uppercase tracking-wider text-xs">Quarter</th>
+              {categories.map(c => (
+                <th key={c} className="px-4 py-3 text-center font-semibold text-[var(--text-muted)] uppercase tracking-wider text-xs">
+                  {c}
+                </th>
+              ))}
+              <th className="px-4 py-3 text-center font-bold text-[var(--text-primary)] uppercase tracking-wider text-xs bg-[var(--bg-secondary)] border-l border-[var(--border)]">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.rows.map((r: any) => (
+              <tr key={r.quarter} className="border-b border-[var(--border)] last:border-0">
+                <td 
+                  className="px-4 py-4 font-bold text-sm bg-[var(--bg-secondary)] border-r border-[var(--border)] cursor-pointer hover:text-[var(--primary)]"
+                  onClick={() => onCellClick(r.quarter, null, `${r.label} Expiry`)}
+                >
+                  {r.label}
+                </td>
+                {categories.map(c => (
+                  <HeatmapCell
+                    key={c}
+                    count={r.cells[c]?.count || 0}
+                    acv={r.cells[c]?.acv || 0}
+                    maxAcv={maxAcv}
+                    onClick={() => onCellClick(r.quarter, c, `${r.label} - ${c}`)}
+                  />
+                ))}
+                <HeatmapCell
+                  count={r.total.count}
+                  acv={r.total.acv}
+                  maxAcv={maxAcv}
+                  onClick={() => onCellClick(r.quarter, null, `${r.label} Total`)}
+                  isTotal={true}
+                  deltaCount={deltas?.quarters?.[r.quarter]?.count}
+                  deltaAcv={deltas?.quarters?.[r.quarter]?.acv}
+                />
+              </tr>
+            ))}
+            {/* Grand Total Row */}
+            <tr className="border-t-2 border-[var(--border)] bg-[var(--bg-secondary)]">
+              <td 
+                className="px-4 py-4 font-bold text-sm border-r border-[var(--border)] cursor-pointer hover:text-[var(--primary)]"
+                onClick={() => onCellClick(null, null, `FY ${yearLabel} Total Expiry`)}
+              >
+                TOTAL
+              </td>
+              {categories.map(c => (
+                <HeatmapCell
+                  key={c}
+                  count={data.totals.category[c]?.count || 0}
+                  acv={data.totals.category[c]?.acv || 0}
+                  maxAcv={maxAcv}
+                  onClick={() => onCellClick(null, c, `FY ${yearLabel} - ${c}`)}
+                  isTotal={true}
+                  deltaCount={deltas?.category?.[c]?.count}
+                  deltaAcv={deltas?.category?.[c]?.acv}
+                />
+              ))}
+              <HeatmapCell
+                count={data.totals.grand.count}
+                acv={data.totals.grand.acv}
+                maxAcv={maxAcv}
+                onClick={() => onCellClick(null, null, `FY ${yearLabel} Grand Total`)}
+                isTotal={true}
+                deltaCount={deltas?.grand?.count}
+                deltaAcv={deltas?.grand?.acv}
+              />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
 
 export default function Expiry() {
-  const { activeSnapshotId, compareSnapshotId, snapshots } = useAppStore()
+  const {
+    activeSnapshotId,
+    compareSnapshotId,
+    snapshots,
+    includeDeletedLost,
+    selectedOppId,
+    setSelectedOppId,
+  } = useAppStore()
 
-  const [viewMode, setViewMode] = useState<ViewMode>('today')
-  const [metricMode, setMetricMode] = useState<MetricMode>('amount')
+  const activeSnapshot = snapshots.find(s => s.id === activeSnapshotId)
+  const compareSnapshot = snapshots.find(s => s.id === compareSnapshotId)
 
-  // Drilldown states
-  const [listDrawerOpen, setListDrawerOpen] = useState(false)
-  const [listDrawerTitle, setListDrawerTitle] = useState('')
-  const [listDrawerSubtitle, setListDrawerSubtitle] = useState('')
-  const [drawerFilters, setDrawerFilters] = useState<any>({})
-  const [selectedOppId, setSelectedOppId] = useState<string | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [modalTitle, setModalTitle] = useState('')
+  const [modalParams, setModalParams] = useState<{ quarter: string | null; category: string | null }>({ quarter: null, category: null })
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['forecast-summary', activeSnapshotId, compareSnapshotId],
-    queryFn: () => getForecastSummary(activeSnapshotId ?? undefined, compareSnapshotId ?? undefined),
+  const { data: sum, isLoading, isError } = useQuery({
+    queryKey: ['v2ExpirySummary', activeSnapshotId, compareSnapshotId, includeDeletedLost],
+    queryFn: () => getV2ExpirySummary({
+      as_of: activeSnapshot?.snapshot_date,
+      compare: compareSnapshot?.snapshot_date,
+      exclude_deleted_lost: !includeDeletedLost
+    }),
+    enabled: !!activeSnapshotId,
   })
 
-  const byCell = data?.by_cell || {}
-  const byQuarter = data?.by_quarter || {}
-  const totals = data?.totals || {}
+  const { data: dealsData } = useQuery({
+    queryKey: ['v2ExpiryDeals', activeSnapshotId, modalParams.quarter, modalParams.category, includeDeletedLost],
+    queryFn: () => getV2ExpiryDeals({
+      quarter: modalParams.quarter || undefined,
+      category: modalParams.category || undefined,
+      as_of: activeSnapshot?.snapshot_date,
+      exclude_deleted_lost: !includeDeletedLost
+    }),
+    enabled: modalOpen && !!activeSnapshotId,
+  })
 
-  const activeSnap = snapshots.find((s) => s.id === activeSnapshotId)
-  const compareSnap = snapshots.find((s) => s.id === compareSnapshotId)
+  if (!activeSnapshotId) {
+    return <EmptyState title="No active snapshot" description="Please upload or select a snapshot." icon={<AlertTriangle className="w-10 h-10 text-[var(--text-muted)]" />} />
+  }
 
-  // Calculate maximum cell values for heatmap intensity scaling
-  const maxValues = useMemo(() => {
-    let maxAcv = 0
-    let maxCnt = 0
-    let maxDeltaAcv = 0
-    let maxDeltaCnt = 0
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-64 bg-[var(--bg-secondary)] animate-pulse rounded-md"></div>
+        <div className="h-96 w-full bg-[var(--bg-secondary)] animate-pulse rounded-xl"></div>
+        <div className="h-48 w-full bg-[var(--bg-secondary)] animate-pulse rounded-xl"></div>
+      </div>
+    )
+  }
 
-    QUARTERS.forEach((q) => {
-      CATEGORIES.forEach((c) => {
-        const cell = byCell[`${q}|${c}`]
-        if (cell) {
-          maxAcv = Math.max(maxAcv, cell.today?.acv || 0)
-          maxCnt = Math.max(maxCnt, cell.today?.count || 0)
+  if (isError || !sum || sum.error) {
+    return <EmptyState title="Error" description={sum?.error || 'Failed to load Expiry view.'} icon={<AlertTriangle className="w-10 h-10 text-[var(--text-muted)]" />} />
+  }
 
-          const dY = cell.delta_vs_yesterday
-          const dL = cell.delta_vs_lastweek
-          if (dY) {
-            maxDeltaAcv = Math.max(maxDeltaAcv, Math.abs(dY.acv || 0))
-            maxDeltaCnt = Math.max(maxDeltaCnt, Math.abs(dY.count || 0))
-          }
-          if (dL) {
-            maxDeltaAcv = Math.max(maxDeltaAcv, Math.abs(dL.acv || 0))
-            maxDeltaCnt = Math.max(maxDeltaCnt, Math.abs(dL.count || 0))
-          }
-        }
+  const handleCellClick = (quarter: string | null, category: string | null, title: string) => {
+    setModalParams({ quarter, category })
+    setModalTitle(title)
+    setModalOpen(true)
+  }
+
+  const fy1 = sum.fiscal_years?.[0]?.label
+  const fy2 = sum.fiscal_years?.[1]?.label
+  const grid1 = sum.grids?.[fy1]
+  const grid2 = sum.grids?.[fy2]
+  const deltas1 = sum.deltas?.[fy1]
+  const deltas2 = sum.deltas?.[fy2]
+
+  let maxAcv = 0
+  if (grid1 && grid1.rows) {
+    grid1.rows.forEach((r: any) => {
+      sum.categories.forEach((c: string) => {
+        if (r.cells[c] && r.cells[c].acv > maxAcv) maxAcv = r.cells[c].acv
       })
     })
-
-    return { maxAcv: maxAcv || 1, maxCnt: maxCnt || 1, maxDeltaAcv: maxDeltaAcv || 1, maxDeltaCnt: maxDeltaCnt || 1 }
-  }, [byCell])
-
-  const handleCellClick = (quarter: string, category: string) => {
-    setDrawerFilters({
-      snapshotId: activeSnapshotId ?? undefined,
-      serviceExpiryPeriod: [quarter],
-      forecastCategory: [category],
-    })
-    setListDrawerTitle(`${quarter} · ${category} Opportunities`)
-    setListDrawerSubtitle(`Scoped deals with expiry ${quarter} in ${category}`)
-    setListDrawerOpen(true)
   }
-
-  const handleQuarterClick = (quarter: string) => {
-    setDrawerFilters({
-      snapshotId: activeSnapshotId ?? undefined,
-      serviceExpiryPeriod: [quarter],
+  if (grid2 && grid2.rows) {
+    grid2.rows.forEach((r: any) => {
+      sum.categories.forEach((c: string) => {
+        if (r.cells[c] && r.cells[c].acv > maxAcv) maxAcv = r.cells[c].acv
+      })
     })
-    setListDrawerTitle(`${quarter} · All Categories`)
-    setListDrawerSubtitle(`All forecast-scoped renewal deals expiring in ${quarter}`)
-    setListDrawerOpen(true)
-  }
-
-  const handleCategoryTotalClick = (category: string) => {
-    setDrawerFilters({
-      snapshotId: activeSnapshotId ?? undefined,
-      forecastCategory: [category],
-      serviceExpiryPeriod: QUARTERS,
-    })
-    setListDrawerTitle(`${category} · Expiry Scope`)
-    setListDrawerSubtitle(`All ${category} opportunities across Q1-2026 to Q4-2027`)
-    setListDrawerOpen(true)
-  }
-
-  const handleGrandTotalClick = () => {
-    setDrawerFilters({
-      snapshotId: activeSnapshotId ?? undefined,
-      serviceExpiryPeriod: QUARTERS,
-    })
-    setListDrawerTitle(`Expiry Scope Grand Total`)
-    setListDrawerSubtitle(`All 1,167 opportunities within Q1-2026 .. Q4-2027 scope`)
-    setListDrawerOpen(true)
   }
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Page Title & Scope Notice */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-6"
+    >
+      <div className="flex items-center justify-between">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400">
-              <Calendar className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-black font-display tracking-tight text-[var(--text-primary)]">
-                Service Expiry Schedule
-              </h1>
-              <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                Expiry period cohort analysis across Q1-2026 to Q4-2027 with category breakdown and deltas
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Global View & Metric Controls */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <SegmentedControl
-            options={[
-              { value: 'today', label: activeSnap?.label || 'Selected Date' },
-              { value: 'vs_yesterday', label: 'vs Compare Date' },
-              { value: 'vs_lastweek', label: 'vs Last Week' },
-            ]}
-            value={viewMode}
-            onChange={(v) => setViewMode(v as ViewMode)}
-            size="sm"
-          />
-
-          <SegmentedControl
-            options={[
-              { value: 'amount', label: 'ACV ($)' },
-              { value: 'count', label: 'Deals (#)' },
-            ]}
-            value={metricMode}
-            onChange={(v) => setMetricMode(v as MetricMode)}
-            size="sm"
-          />
+          <h1 className="text-3xl font-display font-black tracking-tight text-[var(--text-primary)]">Expiry</h1>
+          <p className="text-[var(--text-muted)] mt-1">
+            As of {formatDate(sum.snapshot_date)} {sum.compare_date && ` vs ${formatDate(sum.compare_date)}`}
+          </p>
         </div>
       </div>
 
-      {/* Grand Total Executive Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-4 bg-gradient-to-br from-teal-500/10 via-transparent to-transparent border-teal-500/20">
-          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
-            <span>Expiry Scope Total ACV</span>
-            <DollarSign className="w-4 h-4 text-teal-500" />
-          </div>
-          <div className="mt-2 text-2xl font-black font-display tabular-nums text-[var(--text-primary)]">
-            {isLoading ? <Skeleton className="h-8 w-28" /> : formatACV(totals.today?.acv ?? 120511647.51)}
-          </div>
-          <div className="mt-1 flex items-center gap-2 text-xs">
-            <span className="text-[var(--text-muted)]">Scope: Q1-2026..Q4-2027</span>
-          </div>
-        </Card>
+      {grid1 && (
+        <ExpiryGrid
+          data={grid1}
+          yearLabel={fy1}
+          maxAcv={maxAcv}
+          categories={sum.categories}
+          deltas={deltas1}
+          onCellClick={handleCellClick}
+        />
+      )}
 
-        <Card className="p-4">
-          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
-            <span>Expiry Opportunities</span>
-            <Layers className="w-4 h-4 text-violet-500" />
-          </div>
-          <div className="mt-2 text-2xl font-black font-display tabular-nums text-[var(--text-primary)]">
-            {isLoading ? <Skeleton className="h-8 w-20" /> : `${totals.today?.count ?? 1167} deals`}
-          </div>
-          <div className="mt-1 text-xs text-[var(--text-muted)]">
-            Non-blank forecast categories
-          </div>
-        </Card>
+      {grid2 && (
+        <ExpiryGrid
+          data={grid2}
+          yearLabel={fy2}
+          maxAcv={maxAcv}
+          categories={sum.categories}
+          deltas={deltas2}
+          onCellClick={handleCellClick}
+        />
+      )}
 
-        <Card className="p-4">
-          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
-            <span>Change vs Compare</span>
-            <TrendingUp className="w-4 h-4 text-blue-500" />
-          </div>
-          <div className="mt-2 text-2xl font-black font-display tabular-nums text-emerald-600 dark:text-emerald-400">
-            {isLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : totals.delta_vs_yesterday?.acv !== undefined && totals.delta_vs_yesterday?.acv !== null ? (
-              `${totals.delta_vs_yesterday.acv >= 0 ? '+' : ''}${formatACV(totals.delta_vs_yesterday.acv)}`
-            ) : (
-              '+$1.04M'
-            )}
-          </div>
-          <div className="mt-1 text-xs text-[var(--text-muted)] tabular-nums">
-            {totals.delta_vs_yesterday?.count !== undefined && totals.delta_vs_yesterday?.count !== null
-              ? `${totals.delta_vs_yesterday.count >= 0 ? '+' : ''}${totals.delta_vs_yesterday.count} deals`
-              : '+5 deals'}
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-medium">
-            <span>Change vs Last Week</span>
-            <Calendar className="w-4 h-4 text-amber-500" />
-          </div>
-          <div className="mt-2 text-2xl font-black font-display tabular-nums text-emerald-600 dark:text-emerald-400">
-            {isLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : totals.delta_vs_lastweek?.acv !== undefined && totals.delta_vs_lastweek?.acv !== null ? (
-              `${totals.delta_vs_lastweek.acv >= 0 ? '+' : ''}${formatACV(totals.delta_vs_lastweek.acv)}`
-            ) : (
-              '+$1.13M'
-            )}
-          </div>
-          <div className="mt-1 text-xs text-[var(--text-muted)] tabular-nums">
-            {totals.delta_vs_lastweek?.count !== undefined && totals.delta_vs_lastweek?.count !== null
-              ? `${totals.delta_vs_lastweek.count >= 0 ? '+' : ''}${totals.delta_vs_lastweek.count} deals`
-              : '+20 deals'}
-          </div>
-        </Card>
-      </div>
-
-      {/* Main Heatmap Matrix Card */}
-      <Card className="p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 mb-4 border-b border-[var(--border)]">
-          <div>
-            <h2 className="text-base font-bold font-display text-[var(--text-primary)]">
-              Service Expiry × Forecast Category Heatmap
-            </h2>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">
-              {viewMode === 'today'
-                ? `Cell intensity reflects ${metricMode === 'amount' ? 'ACV amount' : 'deal count'}. Click any cell to inspect opportunities.`
-                : `Diverging colors: green represents increase, orange/red represents decline vs ${viewMode === 'vs_yesterday' ? 'compare date' : 'last week'}.`}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-medium text-[var(--text-muted)] bg-slate-100 dark:bg-white/5 px-2.5 py-1 rounded-md border border-[var(--border)]">
-              Scope: 8 Quarters (Q1-26 .. Q4-27)
-            </span>
+      {/* KPI Tiles */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div 
+          className="card-premium p-6 flex flex-col cursor-pointer transition-transform hover:scale-[1.02]"
+          onClick={() => handleCellClick(null, null, `FY ${fy1} Total`)}
+        >
+          <span className="text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-2">ACV {fy1}</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-black text-[var(--text-primary)]">{acvM(sum.acv_by_year?.[fy1]?.acv)}</span>
+            <span className="text-sm text-[var(--text-muted)] font-medium">{sum.acv_by_year?.[fy1]?.count} deals</span>
           </div>
         </div>
 
-        {/* Heatmap Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-[var(--border)]">
-                <th className="py-3 px-4 font-bold text-[var(--text-primary)] uppercase tracking-wider text-[11px]">
-                  Quarter
-                </th>
-                {CATEGORIES.map((cat) => (
-                  <th
-                    key={cat}
-                    onClick={() => handleCategoryTotalClick(cat)}
-                    className="py-3 px-4 font-bold text-center uppercase tracking-wider text-[11px] cursor-pointer hover:text-teal-500 transition-colors"
-                    style={{ color: FORECAST_COLORS[cat as keyof typeof FORECAST_COLORS] || 'inherit' }}
-                  >
-                    {cat}
-                  </th>
-                ))}
-                <th className="py-3 px-4 font-bold text-right uppercase tracking-wider text-[11px] text-[var(--text-primary)]">
-                  Quarter Total
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)]">
-              {isLoading
-                ? [...Array(8)].map((_, i) => (
-                    <tr key={i}>
-                      <td colSpan={6} className="py-3 px-4">
-                        <Skeleton className="h-9 w-full rounded-lg" />
-                      </td>
-                    </tr>
-                  ))
-                : QUARTERS.map((quarter) => {
-                    const qData = byQuarter[quarter] || { today: { acv: 0, count: 0 } }
-                    const qToday = qData.today || { acv: 0, count: 0 }
-                    const qDelta =
-                      viewMode === 'vs_yesterday'
-                        ? qData.delta_vs_yesterday
-                        : viewMode === 'vs_lastweek'
-                        ? qData.delta_vs_lastweek
-                        : null
-
-                    return (
-                      <tr key={quarter} className="group hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-colors">
-                        {/* Quarter Row Label */}
-                        <td
-                          onClick={() => handleQuarterClick(quarter)}
-                          className="py-3.5 px-4 font-bold font-display text-[var(--text-primary)] cursor-pointer group-hover:text-teal-500 whitespace-nowrap"
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <span>{quarter}</span>
-                            <ChevronRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity text-teal-500" />
-                          </div>
-                        </td>
-
-                        {/* Category Cells */}
-                        {CATEGORIES.map((category) => {
-                          const cell = byCell[`${quarter}|${category}`] || {
-                            today: { acv: 0, count: 0 },
-                            yesterday: { acv: 0, count: 0 },
-                            lastweek: { acv: 0, count: 0 },
-                            delta_vs_yesterday: { acv: 0, count: 0 },
-                            delta_vs_lastweek: { acv: 0, count: 0 },
-                          }
-
-                          const cToday = cell.today || { acv: 0, count: 0 }
-                          const cDelta =
-                            viewMode === 'vs_yesterday'
-                              ? cell.delta_vs_yesterday || { acv: 0, count: 0 }
-                              : viewMode === 'vs_lastweek'
-                              ? cell.delta_vs_lastweek || { acv: 0, count: 0 }
-                              : null
-
-                          let bgClass = 'bg-slate-50 dark:bg-white/[0.03]'
-                          let textClass = 'text-[var(--text-primary)]'
-                          let displayValue = ''
-                          let subValue = ''
-
-                          if (viewMode === 'today') {
-                            const val = metricMode === 'amount' ? cToday.acv : cToday.count
-                            const max = metricMode === 'amount' ? maxValues.maxAcv : maxValues.maxCnt
-                            const ratio = Math.min(val / max, 1)
-
-                            displayValue = metricMode === 'amount' ? formatACV(cToday.acv) : `${cToday.count} deals`
-                            subValue = metricMode === 'amount' ? `${cToday.count} deals` : formatACV(cToday.acv)
-
-                            // Intensity style
-                            if (val > 0) {
-                              if (ratio > 0.6) bgClass = 'bg-teal-500/25 dark:bg-teal-500/30 font-bold'
-                              else if (ratio > 0.3) bgClass = 'bg-teal-500/15 dark:bg-teal-500/20'
-                              else if (ratio > 0.05) bgClass = 'bg-teal-500/8 dark:bg-teal-500/10'
-                            }
-                          } else {
-                            // Diverging palette for changes
-                            const deltaVal =
-                              metricMode === 'amount' ? cDelta?.acv || 0 : cDelta?.count || 0
-
-                            displayValue =
-                              metricMode === 'amount'
-                                ? `${deltaVal >= 0 ? '+' : ''}${formatACV(deltaVal)}`
-                                : `${deltaVal >= 0 ? '+' : ''}${deltaVal} deals`
-
-                            subValue =
-                              metricMode === 'amount'
-                                ? `now ${formatACV(cToday.acv)} (${cToday.count})`
-                                : `now ${cToday.count} (${formatACV(cToday.acv)})`
-
-                            if (deltaVal > 0) {
-                              bgClass =
-                                'bg-emerald-500/15 dark:bg-emerald-500/25 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-                            } else if (deltaVal < 0) {
-                              bgClass =
-                                'bg-amber-500/15 dark:bg-amber-500/25 border border-amber-500/20 text-amber-700 dark:text-amber-300'
-                            } else {
-                              bgClass = 'bg-slate-50 dark:bg-white/[0.02] text-slate-400'
-                            }
-                          }
-
-                          return (
-                            <td key={category} className="p-2 text-center">
-                              <button
-                                onClick={() => handleCellClick(quarter, category)}
-                                className={clsx(
-                                  'w-full py-2.5 px-3 rounded-lg transition-all text-center flex flex-col items-center justify-center hover:scale-[1.02] active:scale-[0.98]',
-                                  bgClass
-                                )}
-                              >
-                                <span className={clsx('font-bold tabular-nums text-xs leading-tight', textClass)}>
-                                  {displayValue}
-                                </span>
-                                <span className="text-[10px] text-[var(--text-muted)] tabular-nums mt-0.5 leading-tight opacity-80">
-                                  {subValue}
-                                </span>
-                              </button>
-                            </td>
-                          )
-                        })}
-
-                        {/* Quarter Row Total */}
-                        <td
-                          onClick={() => handleQuarterClick(quarter)}
-                          className="py-3 px-4 text-right cursor-pointer hover:bg-slate-100/50 dark:hover:bg-white/[0.03] transition-colors rounded-r-lg"
-                        >
-                          <div className="font-extrabold text-[var(--text-primary)] tabular-nums text-xs">
-                            {viewMode === 'today'
-                              ? metricMode === 'amount'
-                                ? formatACV(qToday.acv)
-                                : `${qToday.count} deals`
-                              : metricMode === 'amount'
-                              ? `${(qDelta?.acv || 0) >= 0 ? '+' : ''}${formatACV(qDelta?.acv || 0)}`
-                              : `${(qDelta?.count || 0) >= 0 ? '+' : ''}${qDelta?.count || 0} deals`}
-                          </div>
-                          <div className="text-[10px] text-[var(--text-muted)] tabular-nums mt-0.5">
-                            {viewMode === 'today'
-                              ? metricMode === 'amount'
-                                ? `${qToday.count} deals`
-                                : formatACV(qToday.acv)
-                              : `now ${formatACV(qToday.acv)} (${qToday.count})`}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-
-              {/* Grand Total Strip Row */}
-              <tr
-                onClick={handleGrandTotalClick}
-                className="bg-slate-100/80 dark:bg-white/[0.06] font-bold border-t-2 border-[var(--border)] cursor-pointer hover:bg-slate-200/60 dark:hover:bg-white/[0.1] transition-colors"
-              >
-                <td className="py-4 px-4 font-black font-display text-[var(--text-primary)] uppercase tracking-wider text-xs">
-                  Grand Total
-                </td>
-
-                {CATEGORIES.map((cat) => {
-                  let catTodayAcv = 0
-                  let catTodayCnt = 0
-                  let catDeltaAcv = 0
-                  let catDeltaCnt = 0
-
-                  QUARTERS.forEach((q) => {
-                    const cell = byCell[`${q}|${cat}`]
-                    if (cell) {
-                      catTodayAcv += cell.today?.acv || 0
-                      catTodayCnt += cell.today?.count || 0
-
-                      const d =
-                        viewMode === 'vs_yesterday'
-                          ? cell.delta_vs_yesterday
-                          : viewMode === 'vs_lastweek'
-                          ? cell.delta_vs_lastweek
-                          : null
-                      if (d) {
-                        catDeltaAcv += d.acv || 0
-                        catDeltaCnt += d.count || 0
-                      }
-                    }
-                  })
-
-                  const valStr =
-                    viewMode === 'today'
-                      ? metricMode === 'amount'
-                        ? formatACV(catTodayAcv)
-                        : `${catTodayCnt} deals`
-                      : metricMode === 'amount'
-                      ? `${catDeltaAcv >= 0 ? '+' : ''}${formatACV(catDeltaAcv)}`
-                      : `${catDeltaCnt >= 0 ? '+' : ''}${catDeltaCnt} deals`
-
-                  const subStr =
-                    viewMode === 'today'
-                      ? metricMode === 'amount'
-                        ? `${catTodayCnt} deals`
-                        : formatACV(catTodayAcv)
-                      : `now ${formatACV(catTodayAcv)} (${catTodayCnt})`
-
-                  return (
-                    <td key={cat} className="p-2 text-center">
-                      <div className="py-2 px-3 rounded-lg bg-white/60 dark:bg-black/20">
-                        <div className="font-black text-xs tabular-nums text-[var(--text-primary)]">{valStr}</div>
-                        <div className="text-[10px] text-[var(--text-muted)] tabular-nums mt-0.5">{subStr}</div>
-                      </div>
-                    </td>
-                  )
-                })}
-
-                {/* Overall Scope Grand Total */}
-                <td className="py-4 px-4 text-right">
-                  <div className="font-black text-sm text-teal-600 dark:text-teal-400 tabular-nums font-display">
-                    {viewMode === 'today'
-                      ? metricMode === 'amount'
-                        ? formatACV(totals.today?.acv ?? 120511647.51)
-                        : `${totals.today?.count ?? 1167} deals`
-                      : metricMode === 'amount'
-                      ? `${((viewMode === 'vs_yesterday' ? totals.delta_vs_yesterday?.acv : totals.delta_vs_lastweek?.acv) || 0) >= 0 ? '+' : ''}${formatACV((viewMode === 'vs_yesterday' ? totals.delta_vs_yesterday?.acv : totals.delta_vs_lastweek?.acv) || 0)}`
-                      : `${((viewMode === 'vs_yesterday' ? totals.delta_vs_yesterday?.count : totals.delta_vs_lastweek?.count) || 0) >= 0 ? '+' : ''}${(viewMode === 'vs_yesterday' ? totals.delta_vs_yesterday?.count : totals.delta_vs_lastweek?.count) || 0} deals`}
-                  </div>
-                  <div className="text-[11px] text-[var(--text-muted)] tabular-nums mt-0.5 font-semibold">
-                    {viewMode === 'today'
-                      ? metricMode === 'amount'
-                        ? `${totals.today?.count ?? 1167} deals`
-                        : formatACV(totals.today?.acv ?? 120511647.51)
-                      : `now ${formatACV(totals.today?.acv ?? 120511647.51)} (${totals.today?.count ?? 1167})`}
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {/* Stacked Column Timeline by Quarter */}
-      <Card className="p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 mb-6 border-b border-[var(--border)]">
-          <div>
-            <h2 className="text-base font-bold font-display text-[var(--text-primary)]">
-              Quarter Timeline Distribution
-            </h2>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">
-              Stacked breakdown of opportunities by quarter. Click any column to view deals.
-            </p>
-          </div>
-
-          {/* Legend */}
-          <div className="flex flex-wrap items-center gap-3">
-            {CATEGORIES.map((cat) => (
-              <div key={cat} className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
-                <div
-                  className="w-3 h-3 rounded-sm"
-                  style={{ backgroundColor: FORECAST_COLORS[cat as keyof typeof FORECAST_COLORS] || '#64748b' }}
-                />
-                <span>{cat}</span>
-              </div>
-            ))}
+        <div 
+          className="card-premium p-6 flex flex-col cursor-pointer transition-transform hover:scale-[1.02]"
+          onClick={() => handleCellClick(null, null, `FY ${fy2} Total`)}
+        >
+          <span className="text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-2">ACV {fy2}</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-black text-[var(--text-primary)]">{acvM(sum.acv_by_year?.[fy2]?.acv)}</span>
+            <span className="text-sm text-[var(--text-muted)] font-medium">{sum.acv_by_year?.[fy2]?.count} deals</span>
           </div>
         </div>
 
-        {/* Stacked Bars Visual */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 pt-4">
-          {QUARTERS.map((quarter) => {
-            const qData = byQuarter[quarter]?.today || { acv: 0, count: 0 }
-            const qTotalAcv = qData.acv || 0
-            const qTotalCnt = qData.count || 0
-
-            return (
-              <button
-                key={quarter}
-                onClick={() => handleQuarterClick(quarter)}
-                className="group flex flex-col items-center p-3 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/5 hover:border-teal-500/40 hover:bg-slate-100/80 dark:hover:bg-white/[0.06] transition-all text-center"
-              >
-                <span className="text-xs font-bold font-display text-[var(--text-primary)] group-hover:text-teal-500 transition-colors">
-                  {quarter}
-                </span>
-
-                {/* Stacked Mini Bar representation */}
-                <div className="w-full h-32 my-3 rounded-lg overflow-hidden flex flex-col-reverse bg-slate-200/70 dark:bg-white/10 p-0.5 gap-0.5">
-                  {CATEGORIES.map((cat) => {
-                    const c = byCell[`${quarter}|${cat}`]?.today || { acv: 0, count: 0 }
-                    const val = metricMode === 'amount' ? c.acv : c.count
-                    const maxVal = metricMode === 'amount' ? 55000000 : 450 // approximate max quarter
-                    const heightPct = Math.min((val / maxVal) * 100, 100)
-
-                    if (heightPct <= 0) return null
-
-                    return (
-                      <div
-                        key={cat}
-                        style={{
-                          height: `${Math.max(heightPct, 6)}%`,
-                          backgroundColor: FORECAST_COLORS[cat as keyof typeof FORECAST_COLORS] || '#64748b',
-                        }}
-                        title={`${quarter} ${cat}: ${formatACV(c.acv)} (${c.count} deals)`}
-                        className="w-full rounded-sm transition-all hover:brightness-110"
-                      />
-                    )
-                  })}
+        <div className="card-premium p-6 flex flex-col">
+          <span className="text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-2">Slippage to {fy2}</span>
+          <div className="flex items-baseline gap-2 mb-3">
+            <span className="text-3xl font-black text-red-600 dark:text-red-400">{acvM(sum.slippage?.acv)}</span>
+            <span className="text-sm text-[var(--text-muted)] font-medium">{sum.slippage?.count} deals</span>
+          </div>
+          {sum.slippage?.by_quarter?.length > 0 && (
+            <div className="mt-2 space-y-1 border-t border-[var(--border)] pt-3">
+              <span className="text-[10px] uppercase font-bold text-[var(--text-muted)]">By Expiry Quarter</span>
+              {sum.slippage.by_quarter.map((q: any) => (
+                <div key={q.quarter} className="flex justify-between items-center text-xs">
+                  <span className="font-medium text-[var(--text-secondary)]">{q.quarter}</span>
+                  <span className="text-[var(--text-muted)]">{q.count} deals / {acvM(q.acv)}</span>
                 </div>
-
-                <span className="text-xs font-bold text-[var(--text-primary)] tabular-nums">
-                  {metricMode === 'amount' ? formatACV(qTotalAcv) : `${qTotalCnt} deals`}
-                </span>
-                <span className="text-[10px] text-[var(--text-muted)] tabular-nums mt-0.5">
-                  {metricMode === 'amount' ? `${qTotalCnt} deals` : formatACV(qTotalAcv)}
-                </span>
-              </button>
-            )
-          })}
+              ))}
+            </div>
+          )}
         </div>
-      </Card>
+      </div>
 
-      {/* Drilldown List Drawer */}
-      <OpportunitiesListDrawer
-        isOpen={listDrawerOpen}
-        onClose={() => setListDrawerOpen(false)}
-        title={listDrawerTitle}
-        subtitle={listDrawerSubtitle}
-        filters={drawerFilters}
-        onSelectOpp={(id) => setSelectedOppId(id)}
-      />
-
-      {/* Deep-dive Opportunity Drawer */}
+      {modalOpen && (
+        <DealModal
+          title={modalTitle}
+          deals={dealsData || []}
+          onSelectOpp={setSelectedOppId}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
       <OpportunityDrawer oppId={selectedOppId} onClose={() => setSelectedOppId(null)} />
-    </div>
+    </motion.div>
   )
 }

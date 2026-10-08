@@ -23,8 +23,7 @@ import { useAppStore } from '@/store/appStore'
 import clsx from 'clsx'
 
 const NAV_ITEMS = [
-  { to: '/', icon: LayoutDashboard,
-  Clock, label: 'Overview' },
+  { to: '/', icon: LayoutDashboard, label: 'Overview' },
   { to: '/expiry', icon: Calendar, label: 'Expiry' },
   { to: '/approvals', icon: CheckCircle2, label: 'Approvals' },
   { to: '/business-units', icon: Building2, label: 'Business Units' },

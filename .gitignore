@@ -62,3 +62,5 @@ data/sample_oct7/
 /debug_*.py
 /inspect_*.py
 /fix_*.py
+
+/rebrand.py

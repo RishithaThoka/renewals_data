@@ -103,9 +103,9 @@ class ScopeService:
         )
 
     @staticmethod
-    def expiry_window(snapshot_date: date) -> ColumnElement[bool]:
+    def expiry_window(quarter: str) -> ColumnElement[bool]:
         """Scope: renewals AND service_expiry_period in current fiscal year + next fiscal year"""
-        cq = ScopeService.current_quarter(snapshot_date)
+        cq = quarter
         if not cq or "-" not in cq:
             return False
         _, y_part = cq.split("-")
