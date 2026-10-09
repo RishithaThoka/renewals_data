@@ -8,6 +8,15 @@ export function formatACV(val: number | null | undefined, showSign = false): str
   return `${sign}${val < 0 ? '-' : ''}$${abs.toFixed(2)}`
 }
 
+export function acvM(v: number | null | undefined): string {
+  if (v == null) return '—'
+  const abs = Math.abs(v)
+  const sign = v < 0 ? '-' : ''
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000)     return `${sign}$${(abs / 1_000).toFixed(0)}K`
+  return `${sign}$${abs.toFixed(0)}`
+}
+
 /** Format count with thousands separator: 1234567 → "1,234,567" */
 export function formatCount(val: number | null | undefined): string {
   if (val == null) return '—'

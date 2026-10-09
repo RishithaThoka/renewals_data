@@ -114,24 +114,7 @@ export default function Topbar() {
     <header className="h-16 flex items-center justify-between px-6 border-b flex-shrink-0 bg-[var(--bg-card)] border-[var(--border)] shadow-sm z-20">
       {/* Left: Mobileum Logo & Command Palette Quick Search */}
       <div className="flex items-center gap-4">
-        {/* Ribbon Brand Logo */}
-        <div className="flex items-center gap-2.5 pr-4 border-r border-[var(--border)]">
-          <div className="w-8 h-8 rounded-lg overflow-hidden bg-[#12284C] p-1 flex items-center justify-center shadow-sm">
-            <img
-              src="/assets/logo.png"
-              alt="Mobileum"
-              className="w-full h-full object-contain"
-            />
-          </div>
-          <div>
-            <h1 className="font-display font-extrabold text-sm tracking-tight text-[var(--text-primary)] leading-tight">
-              Mobileum
-            </h1>
-            <p className="text-[10px] font-semibold text-teal-600 dark:text-teal-400 tracking-wider uppercase">
-              Mobileum Horizon
-            </p>
-          </div>
-        </div>
+
 
         {/* Global Scope Selector */}
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-xs shadow-sm">

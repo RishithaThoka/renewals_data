@@ -3,7 +3,7 @@
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Mobileum Renewals Intelligence" -ForegroundColor Cyan
+Write-Host "  Mobileum Horizon" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -26,18 +26,7 @@ Write-Host "[backend] Installing Python dependencies..." -ForegroundColor Yellow
 & "$VenvDir\Scripts\pip.exe" install -r "$Root\backend\requirements.txt" --quiet
 
 # ── Step 3: Seed the database ──────────────────────────────────
-$DbFile = "$Root\renewals.db"
-if (-not (Test-Path $DbFile)) {
-    Write-Host "[seed] First run — seeding database from Excel files..." -ForegroundColor Yellow
-    & "$VenvDir\Scripts\python.exe" -m backend.seed
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[seed] ERROR: Seed failed. Check that data/ contains the Excel files." -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "[seed] Database seeded successfully." -ForegroundColor Green
-} else {
-    Write-Host "[seed] Database already exists — skipping seed." -ForegroundColor Gray
-}
+# Skipped seeding as per user instruction
 
 # ── Step 4: Frontend dependencies ─────────────────────────────
 $NodeModules = "$Root\frontend\node_modules"

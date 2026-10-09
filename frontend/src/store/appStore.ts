@@ -33,6 +33,10 @@ interface AppState {
   includeDeletedLost: boolean
   setIncludeDeletedLost: (val: boolean) => void
 
+  // Metric Toggle Mode (persisted)
+  metricMode: 'Amount' | 'Count' | 'Both'
+  setMetricMode: (mode: 'Amount' | 'Count' | 'Both') => void
+
   // Active snapshot ("View as of")
   activeSnapshotId: string | null
   setActiveSnapshotId: (id: string | null) => void
@@ -124,6 +128,9 @@ export const useAppStore = create<AppState>()(
       includeDeletedLost: false,
       setIncludeDeletedLost: (includeDeletedLost) => set({ includeDeletedLost }),
 
+      metricMode: 'Amount',
+      setMetricMode: (metricMode) => set({ metricMode }),
+
       activeSnapshotId: null,
       setActiveSnapshotId: (id) => set({ activeSnapshotId: id }),
 
@@ -162,6 +169,7 @@ export const useAppStore = create<AppState>()(
         darkMode: s.darkMode,
         scope: s.scope,
         includeDeletedLost: s.includeDeletedLost,
+        metricMode: s.metricMode,
         activeSnapshotId: s.activeSnapshotId,
         compareSnapshotId: s.compareSnapshotId,
         sidebarCollapsed: s.sidebarCollapsed,

@@ -5,7 +5,9 @@ import Shell from '@/components/layout/Shell'
 import Dashboard from '@/pages/Dashboard'
 import Pipeline from '@/pages/Pipeline'
 import Expiry from '@/pages/Expiry'
+import ExpiryLegacy from '@/pages/ExpiryLegacy'
 import Approvals from '@/pages/Approvals'
+import ApprovalsLegacy from '@/pages/ApprovalsLegacy'
 import BusinessUnits from '@/pages/BusinessUnits'
 import Regions from '@/pages/Regions'
 import Delayed from '@/pages/Delayed'
@@ -46,7 +48,9 @@ export default function App() {
         <Route element={<Shell />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/expiry" element={<Expiry />} />
+          <Route path="/expiry-legacy" element={<ExpiryLegacy />} />
           <Route path="/approvals" element={<Approvals />} />
+          <Route path="/approvals-legacy" element={<ApprovalsLegacy />} />
           <Route path="/business-units" element={<BusinessUnits />} />
           <Route path="/bu" element={<BusinessUnits />} />
           <Route path="/regions" element={<Regions />} />

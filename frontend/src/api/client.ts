@@ -369,3 +369,9 @@ export const getV2ExpiryDeals = async (params: {
   const res = await api.get('/v2/expiry/deals', { params: p })
   return res.data
 }
+
+export const getApprovalsDistribution = async (as_of: string, compare: string | null = null, exclude_deleted_lost: boolean = false) => {
+  const params: any = { as_of, exclude_deleted_lost }
+  if (compare) params.compare = compare
+  return api.get('/v2/approvals/distribution', { params }).then(r => r.data)
+}
