@@ -188,7 +188,7 @@ export default function Topbar() {
         </div>
 
         {/* "Compare with" Selector */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-xs shadow-sm" title={getCompareLabel()}>
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-xs shadow-sm whitespace-nowrap" title={getCompareLabel()}>
           <GitCompare className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" />
           <span className="font-medium text-[var(--text-muted)] hidden md:inline">
             vs:

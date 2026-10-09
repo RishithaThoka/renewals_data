@@ -167,6 +167,14 @@ export default function Dashboard() {
     )
   }
 
+  if (summary?.error || movements?.error || regional?.error) {
+    return <div className="p-8 text-center text-rose-500 font-semibold bg-rose-50 border border-rose-200 rounded-xl m-6">{summary?.error || movements?.error || regional?.error}</div>
+  }
+
+  if (!isLoading && (!summary || !summary.total)) {
+    return <EmptyState title="No data" description="Overview data is empty or malformed." />
+  }
+
   const otherCount  = summary?.other_region_count ?? 0
   const cats        = summary?.categories ?? {}
   const slip        = summary?.slippage_to_2027 ?? { count: 0, acv: 0 }

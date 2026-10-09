@@ -71,7 +71,10 @@ export default function Expiry() {
   }
 
   if (isError || !sum || sum.error) {
-    return <EmptyState title="Error" description={sum?.error || 'Failed to load Expiry view.'} icon={<AlertTriangle className="w-10 h-10 text-[var(--text-muted)]" />} />
+    return <div className="p-8 text-center text-rose-500 font-semibold bg-rose-50 border border-rose-200 rounded-xl m-6">{sum?.error || 'Failed to load Expiry view.'}</div>
+  }
+  if (!sum.total) {
+    return <EmptyState title="No data" description="No expiry data found or the response was malformed." />
   }
 
   const handleCellClick = (quarter: string | null, category: string | null, title: string) => {

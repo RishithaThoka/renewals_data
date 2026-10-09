@@ -31,12 +31,12 @@ function StatChip({ label, data, icon: Icon, metricMode, compareDate }: any) {
 
   const renderDeltas = () => {
     if (dCust && (dCust.count || dCust.acv)) {
-      return <span>{compareDate ? compareDate.substring(5,10) : 'vs'} {formatDelta(isCount ? dCust.count : dCust.acv, isCount)}</span>
+      return <span>{compareDate ? compareDate.substring(5,10) : 'vs'} {formatDelta(dCust.count, true)} · {formatDelta(dCust.acv, false)}</span>
     }
     return (
       <span className="flex flex-col gap-0.5 mt-1 text-[10px] text-[var(--text-muted)] font-medium">
-        <span>vs {data.yesterday_date ? data.yesterday_date.substring(5,10) : 'Yesterday'} {formatDelta(isCount ? dYes?.count : dYes?.acv, isCount)}</span>
-        <span>vs {data.lastweek_date ? data.lastweek_date.substring(5,10) : 'Last Week'} {formatDelta(isCount ? dLast?.count : dLast?.acv, isCount)}</span>
+        <span>vs {data.yesterday_date ? data.yesterday_date.substring(5,10) : 'Yesterday'} {formatDelta(dYes?.count, true)} · {formatDelta(dYes?.acv, false)}</span>
+        <span>vs {data.lastweek_date ? data.lastweek_date.substring(5,10) : 'Last Week'} {formatDelta(dLast?.count, true)} · {formatDelta(dLast?.acv, false)}</span>
       </span>
     )
   }
@@ -93,11 +93,22 @@ export default function Approvals() {
 
   if (!activeSnapshotId) return <EmptyState title="No active snapshot" description="Select a snapshot to view data" />
   if (isLoading) return <div className="p-8 text-center text-slate-500 animate-pulse">Loading approval data...</div>
-  if (error || data?.error) return <div className="p-8 text-center text-rose-500 font-semibold">{(error as any)?.message || data?.error}</div>
-  if (!data) return <EmptyState title="No data" description="No approval data found for the selected criteria." />
-  if (data.total.count === 0) return <EmptyState title="No data" description="The data slice is empty." />
+  if (error || data?.error) return <div className="p-8 text-center text-rose-500 font-semibold bg-rose-50 border border-rose-200 rounded-xl m-6">{(error as any)?.message || data?.error}</div>
+  if (!data || !data.total) return <EmptyState title="No data" description="No approval data found or the response was malformed." />
+  if (data.total?.count === 0) return <EmptyState title="No data" description="The data slice is empty." />
 
-  const { total, statuses, matrix, categories, funnel, movements_yesterday, movements_lastweek, movements_custom, pending_deals, data_slice, data_slice_key, yesterday_date, lastweek_date } = data
+  const total = data.total || { count: 0, acv: 0 }
+  const statuses = data.statuses || []
+  const matrix = data.matrix || {}
+  const categories = data.categories || []
+  const movements_yesterday = data.movements_yesterday || []
+  const movements_lastweek = data.movements_lastweek || []
+  const movements_custom = data.movements_custom || []
+  const pending_deals = data.pending_deals || []
+  const data_slice = data.data_slice || ''
+  const data_slice_key = data.data_slice_key || ''
+  const yesterday_date = data.yesterday_date
+  const lastweek_date = data.lastweek_date
   
   const getStatus = (name: string) => statuses.find((s: any) => s.status === name) || { count: 0, acv: 0, delta_yesterday: {}, delta_lastweek: {}, delta_custom: {} }
   const attachDates = (obj: any) => ({ ...obj, yesterday_date, lastweek_date })
@@ -120,7 +131,7 @@ export default function Approvals() {
   const rowsForGrid = Object.entries(matrix).map(([st, cells]: [string, any]) => ({
     id: st,
     label: st,
-    cells,
+    cells: cells || {},
     total: getStatus(st)
   }))
 
@@ -146,7 +157,7 @@ export default function Approvals() {
     const startPct = cumulativePct
     cumulativePct += pct
     const color = r.status === 'Approved' ? '#10B981' : r.status === 'Pending Approval' ? '#F59E0B' : r.status === 'Blank' ? '#94A3B8' : '#ef4444'
-    return { status: r.status, pct, startPct, color }
+    return { ...r, pct, startPct, color }
   })
 
   return (
@@ -178,39 +189,61 @@ export default function Approvals() {
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         
         {/* Left: Donut Chart */}
-        <Card className="xl:col-span-4 p-5 flex flex-col justify-center items-center h-[360px] cursor-pointer hover:border-[var(--primary)] transition-colors" onClick={() => handleCellClick({}, 'All Approvals')}>
-           <h2 className="text-sm font-display font-bold text-[var(--text-primary)] self-start mb-4">Status Share</h2>
-           <div className="relative w-48 h-48 flex-shrink-0 flex items-center justify-center">
-             <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
-               <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--bg-secondary)" strokeWidth="14" />
-               {donutSegments.map((seg: any) => {
-                 const circumference = 2 * Math.PI * 40
-                 const strokeDasharray = `${(seg.pct / 100) * circumference} ${circumference}`
-                 const strokeDashoffset = -((seg.startPct / 100) * circumference)
-                 if (seg.pct === 0) return null
-                 return (
-                   <circle
-                     key={seg.status}
-                     cx="50" cy="50" r="40"
-                     fill="transparent"
-                     stroke={seg.color}
-                     strokeWidth="14"
-                     strokeDasharray={strokeDasharray}
-                     strokeDashoffset={strokeDashoffset}
-                     className="transition-all hover:opacity-80"
-                   />
-                 )
-               })}
-             </svg>
-             <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
-               <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{metricMode === 'Count' ? 'Deals' : 'ACV'}</span>
-               <span className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums">{metricMode === 'Count' ? formatNumber(total.count) : acvM(total.acv)}</span>
+        <Card className="xl:col-span-5 p-5 flex flex-col hover:border-[var(--primary)] transition-colors">
+           <h2 className="text-sm font-display font-bold text-[var(--text-primary)] mb-4 cursor-pointer" onClick={() => handleCellClick({}, 'All Approvals')}>Status Share</h2>
+           <div className="flex flex-col sm:flex-row items-center gap-6">
+             <div className="relative w-40 h-40 flex-shrink-0 flex items-center justify-center cursor-pointer" onClick={() => handleCellClick({}, 'All Approvals')}>
+               <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
+                 <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--bg-secondary)" strokeWidth="14" />
+                 {donutSegments.map((seg: any) => {
+                   const circumference = 2 * Math.PI * 40
+                   const strokeDasharray = `${(seg.pct / 100) * circumference} ${circumference}`
+                   const strokeDashoffset = -((seg.startPct / 100) * circumference)
+                   if (seg.pct === 0) return null
+                   return (
+                     <circle
+                       key={seg.status}
+                       cx="50" cy="50" r="40"
+                       fill="transparent"
+                       stroke={seg.color}
+                       strokeWidth="14"
+                       strokeDasharray={strokeDasharray}
+                       strokeDashoffset={strokeDashoffset}
+                       className="transition-all hover:opacity-80"
+                       onClick={(e) => { e.stopPropagation(); handleCellClick({ approval_status: seg.status }, seg.status) }}
+                     />
+                   )
+                 })}
+               </svg>
+               <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+                 <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{metricMode === 'Count' ? 'Deals' : 'ACV'}</span>
+                 <span className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums">{metricMode === 'Count' ? formatNumber(total?.count ?? 0) : acvM(total?.acv ?? 0)}</span>
+               </div>
+             </div>
+             
+             {/* Legend */}
+             <div className="flex-1 w-full space-y-2">
+               {donutSegments.map((seg: any) => (
+                 <div key={seg.status} className="flex flex-col bg-[var(--bg-secondary)] p-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)] transition-colors" onClick={() => handleCellClick({ approval_status: seg.status }, seg.status)}>
+                   <div className="flex items-center justify-between font-bold text-[var(--text-primary)] text-xs">
+                     <div className="flex items-center gap-1.5">
+                       <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: seg.color }}></div>
+                       <span>{seg.status}</span>
+                     </div>
+                     <span>{metricMode === 'Count' ? formatNumber(seg.count) : acvM(seg.acv)} ({seg.pct.toFixed(0)}%)</span>
+                   </div>
+                   <div className="flex justify-between items-center text-[9px] text-[var(--text-muted)] mt-1 font-medium pl-4">
+                      <span>vs {yesterday_date ? yesterday_date.substring(5,10) : '1d'} {formatDelta(metricMode === 'Count' ? seg.delta_yesterday?.count : seg.delta_yesterday?.acv, metricMode === 'Count')}</span>
+                      <span>vs {lastweek_date ? lastweek_date.substring(5,10) : '7d'} {formatDelta(metricMode === 'Count' ? seg.delta_lastweek?.count : seg.delta_lastweek?.acv, metricMode === 'Count')}</span>
+                   </div>
+                 </div>
+               ))}
              </div>
            </div>
         </Card>
 
         {/* Right: Grid */}
-        <div className="xl:col-span-8">
+        <div className="xl:col-span-7">
           <CompactGrid
             title="Status vs. Forecast Category"
             columns={categories}

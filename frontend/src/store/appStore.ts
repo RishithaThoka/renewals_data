@@ -125,7 +125,7 @@ export const useAppStore = create<AppState>()(
       scope: 'renewals',
       setScope: (scope) => set({ scope }),
 
-      includeDeletedLost: false,
+      includeDeletedLost: true,
       setIncludeDeletedLost: (includeDeletedLost) => set({ includeDeletedLost }),
 
       metricMode: 'Amount',
