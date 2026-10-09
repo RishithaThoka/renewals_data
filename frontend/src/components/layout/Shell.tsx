@@ -1,7 +1,7 @@
 import { Outlet } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle } from 'lucide-react'
-import { api } from '@/lib/api'
+import api from '@/api/client'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 import CommandPalette from './CommandPalette'
@@ -21,8 +21,12 @@ export default function Shell() {
   const { data: dbHealth } = useQuery({
     queryKey: ['dbHealth'],
     queryFn: async () => {
-      const res = await api.get('/api/health/db')
-      return res.data
+      try {
+        const res = await api.get('/health/db')
+        return res.data
+      } catch (e) {
+        return null
+      }
     },
     staleTime: 60000 * 5, // 5 minutes
   })
