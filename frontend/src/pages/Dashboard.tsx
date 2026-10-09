@@ -16,6 +16,7 @@ import { formatDate } from '@/utils/format'
 import { FORECAST_COLORS } from '@/design/tokens'
 import OpportunityDrawer from '@/components/overview/OpportunityDrawer'
 import EmptyState from '@/components/ui/EmptyState'
+import DealListModal from '@/components/common/DealListModal'
 
 // Region display order (Sections 6 & 7)
 const REGION_ORDER = [
@@ -658,7 +659,7 @@ export default function Dashboard() {
 
       {/* Deal modal */}
       {modal && (
-        <DealModal
+        <DealListModal
           title={modal.title}
           deals={modal.deals}
           onSelectOpp={(id) => { setModal(null); setSelectedOppId(id) }}

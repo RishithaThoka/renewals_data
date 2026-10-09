@@ -28,6 +28,8 @@ def get_approvals_distribution(
 def get_approvals_deals(
     status: Optional[str] = None,
     category: Optional[str] = None,
+    region: Optional[str] = None,
+    business_unit: Optional[str] = None,
     as_of: Optional[str] = None,
     exclude_deleted_lost: bool = Query(False),
     db: Session = Depends(get_db)
@@ -39,5 +41,7 @@ def get_approvals_deals(
         status=status,
         category=category,
         as_of=as_of,
-        exclude_deleted_lost=exclude_deleted_lost
+        exclude_deleted_lost=exclude_deleted_lost,
+        region=region,
+        business_unit=business_unit
     )

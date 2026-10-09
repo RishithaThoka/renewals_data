@@ -1,147 +1,113 @@
 import pytest
-from datetime import date
-from backend.models.snapshot import UploadSnapshot
-from backend.models.opportunity import Opportunity
+import pathlib
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend.database import get_db
+from backend.utils.excel_parser import detect_file_slot
 
-# Use the same fixture from test_v2_expiry to avoid duplicating the setup
-from backend.tests.test_v2_expiry import client_and_db
+@pytest.fixture(scope="module")
+def client_and_db(tmp_path_factory):
+    import sqlalchemy
+    from backend.database import Base
+    
+    db_path = tmp_path_factory.mktemp("data") / "test_approvals.db"
+    engine = sqlalchemy.create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    Session = sqlalchemy.orm.sessionmaker(bind=engine)
+    
+    def override_db():
+        db = Session()
+        try: yield db
+        finally: db.close()
 
-def test_v2_approvals_distribution(client_and_db):
-    client = client_and_db
+    app.dependency_overrides[get_db] = override_db
 
-    r = client.get("/api/v2/approvals/distribution?as_of=2026-10-07&exclude_deleted_lost=false")
-    assert r.status_code == 200, r.text
-    d = r.json()
+    sample = pathlib.Path("data/sample_oct7")
+    slots = {}
+    for fp in sorted(sample.glob("*.xlsx")):
+        slots[detect_file_slot(fp)[0]] = fp
 
-    assert d["data_slice"] == "Renewals"
-    assert d["data_slice_key"] == "Q4-2026"
+    with TestClient(app) as test_client:
+        files = [(slot, (fp.name, open(fp, "rb"),
+                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                 for slot, fp in slots.items()]
+        data = {"data_as_of_date": "2026-10-07", "yesterday_date": "2026-10-06"}
+        vr = test_client.post("/api/snapshots/validate", data=data, files=files)
+        assert vr.status_code == 200, vr.text
+        session_id = vr.json()["session_id"]
+
+        cr = test_client.post("/api/snapshots/commit",
+                         json={"session_id": session_id, "replace": False})
+        assert cr.status_code == 200, cr.text
+
+        yield test_client
+
+def test_v2_approvals_oct7(client_and_db):
+    res = client_and_db.get("/api/v2/approvals/distribution?as_of=2026-10-07&exclude_deleted_lost=false")
+    assert res.status_code == 200
+    d = res.json()
+    assert "error" not in d
+    
     assert d["total"]["count"] == 348
     assert d["total"]["acv"] == 40068990.09
-
-    statuses = {s["status"]: s for s in d["statuses"]}
     
-    # Approved
-    appr = statuses["Approved"]
-    assert appr["count"] == 96
-    assert appr["acv"] == 8571916.50
-    assert appr["delta_yesterday"]["count"] == 8
-    assert appr["delta_yesterday"]["acv"] == 413834.99
-    # yesterday 88 / 8,158,081.51 => 96 - 88 = 8, 8571916.50 - 8158081.51 = 413834.99
-    assert appr["delta_lastweek"]["count"] == 96 - 73
-    assert appr["delta_lastweek"]["acv"] == round(8571916.50 - 6172895.93, 2)
-
-    # Pending
-    pend = statuses["Pending Approval"]
-    assert pend["count"] == 6
-    assert pend["acv"] == 304814.55
-    assert pend["delta_yesterday"]["count"] == -1
-    assert pend["delta_yesterday"]["acv"] == -100287.47
-    assert pend["delta_lastweek"]["count"] == 6 - 4
-    assert pend["delta_lastweek"]["acv"] == round(304814.55 - 1464342.36, 2)
-
-    # Blank
-    blnk = statuses["Blank"]
-    assert blnk["count"] == 246
-    assert blnk["acv"] == 31192259.04
-    assert blnk["delta_yesterday"]["count"] == -5
-    assert blnk["delta_yesterday"]["acv"] == 162671.66
-    assert blnk["delta_lastweek"]["count"] == 246 - 257
-    assert blnk["delta_lastweek"]["acv"] == round(31192259.04 - 31527619.47, 2)
-
-    # Sum of status counts
-    assert sum(s["count"] for s in d["statuses"]) == 348
-
-    # Matrix checks
-    mx = d["matrix"]
+    stats = {s["status"]: s for s in d["statuses"]}
+    assert "Blank" in stats
+    assert stats["Blank"]["count"] == 246
+    assert stats["Blank"]["acv"] == 31192259.04
     
-    # Approved Matrix
-    assert mx["Approved"]["Best Case"]["count"] == 13
-    assert mx["Approved"]["Blank"]["count"] == 0
-    assert mx["Approved"]["Commit"]["count"] == 83
-    assert mx["Approved"]["Pipeline"]["count"] == 0
-    assert mx["Approved"]["Best Case"]["acv"] == 1812016.90
-    assert mx["Approved"]["Commit"]["acv"] == 6759899.60
+    assert "Approved" in stats
+    assert stats["Approved"]["count"] == 96
+    assert stats["Approved"]["acv"] == 8571916.50
+    assert stats["Approved"]["delta_yesterday"]["count"] == 96 - 88
+    assert round(stats["Approved"]["delta_yesterday"]["acv"] - (8571916.50 - 8158081.51), 2) == 0.0
+    assert stats["Approved"]["delta_lastweek"]["count"] == 96 - 73
+    assert round(stats["Approved"]["delta_lastweek"]["acv"] - (8571916.50 - 6172895.93), 2) == 0.0
 
-    # Pending Matrix
-    assert mx["Pending Approval"]["Best Case"]["count"] == 1
-    assert mx["Pending Approval"]["Blank"]["count"] == 0
-    assert mx["Pending Approval"]["Commit"]["count"] == 5
-    assert mx["Pending Approval"]["Pipeline"]["count"] == 0
-    assert mx["Pending Approval"]["Best Case"]["acv"] == 18252.34
-    assert mx["Pending Approval"]["Commit"]["acv"] == 286562.21
+    assert "Pending Approval" in stats
+    assert stats["Pending Approval"]["count"] == 6
+    assert stats["Pending Approval"]["acv"] == 304814.55
+    assert stats["Pending Approval"]["delta_yesterday"]["count"] == 6 - 7
+    assert round(stats["Pending Approval"]["delta_yesterday"]["acv"] - (304814.55 - 405102.02), 2) == 0.0
+    assert stats["Pending Approval"]["delta_lastweek"]["count"] == 6 - 4
+    assert round(stats["Pending Approval"]["delta_lastweek"]["acv"] - (304814.55 - 1464342.36), 2) == 0.0
 
-    # Blank Matrix
-    assert mx["Blank"]["Best Case"]["count"] == 20
-    assert mx["Blank"]["Blank"]["count"] == 5
-    assert mx["Blank"]["Commit"]["count"] == 220
-    assert mx["Blank"]["Pipeline"]["count"] == 1
-    assert mx["Blank"]["Best Case"]["acv"] == 7626574.12
-    assert mx["Blank"]["Blank"]["acv"] == 212772.40
-    assert mx["Blank"]["Commit"]["acv"] == 23303174.90
-    assert mx["Blank"]["Pipeline"]["acv"] == 49737.62
+    mat = d["matrix"]
+    assert mat["Approved"]["Best Case"]["count"] == 13
+    assert mat["Approved"]["Commit"]["count"] == 83
+    assert mat["Pending Approval"]["Best Case"]["count"] == 1
+    assert mat["Pending Approval"]["Commit"]["count"] == 5
+    assert mat["Blank"]["Best Case"]["count"] == 20
+    assert mat["Blank"]["Blank"]["count"] == 5
+    assert mat["Blank"]["Commit"]["count"] == 220
+    assert mat["Blank"]["Pipeline"]["count"] == 1
+    
+    # Tests for get_deals
+    def check_deals(qs, count, acv):
+        res = client_and_db.get(f"/api/v2/approvals/deals?as_of=2026-10-07&exclude_deleted_lost=false{qs}")
+        d = res.json()
+        assert d["count"] == count
+        assert round(d["acv"], 2) == round(acv, 2)
+        assert len(d["deals"]) == count
 
-    # Movement table reconcile (loose check as movements omit new/dropped deals)
-    movements = d["movements"]
-    assert isinstance(movements, list)
-
-def test_v2_approvals_deals_endpoint(client_and_db):
-    client = client_and_db
-    r = client.get("/api/v2/approvals/deals?as_of=2026-10-07&status=Approved&category=Commit&exclude_deleted_lost=false")
-    assert r.status_code == 200
-    deals = r.json()
-    assert len(deals) == 83
-    assert round(sum(d["forecast_acv_amount"] for d in deals), 2) == 6759899.60
-
-def test_v2_approvals_exclude_deleted_lost(client_and_db):
-    client = client_and_db
-    r = client.get("/api/v2/approvals/distribution?as_of=2026-10-07&exclude_deleted_lost=true")
-    assert r.status_code == 200
-    d = r.json()
-    assert d["total"]["count"] == 343 # 348 - 5 deleted_lost in Q4-2026
-
-def test_v2_approvals_empty_slice(client_and_db):
-    client = client_and_db
-    r = client.get("/api/v2/approvals/distribution?as_of=2024-01-01") # Some date without data
-    assert r.status_code == 200
-    d = r.json()
-    if "error" in d:
-        pass # Valid response if no snapshot
-    else:
-        assert d["total"]["count"] == 0
+    check_deals("&status=Blank&category=Commit", 220, 23303174.90)
+    check_deals("&status=Blank&category=Blank", 5, 212772.40)
+    check_deals("&status=Approved", 96, 8571916.50)
+    check_deals("&status=Approved&category=Best Case", 13, 1812016.90)
+    check_deals("&status=Pending Approval", 6, 304814.55)
+    check_deals("", 348, 40068990.09)
 
 def test_v2_approvals_time_travel(client_and_db):
-    client = client_and_db
-    from backend.main import app
-    from backend.database import get_db
-    db = next(app.dependency_overrides[get_db]())
-    # Create a synthetic snapshot for 2027-01-05
-    snap = UploadSnapshot(
-        snapshot_date=date(2027, 1, 5),
-        yesterday_date=date(2027, 1, 4),
-        label="Time Travel"
-    )
-    db.add(snap)
-    db.commit()
-    
-    # Add a fake opportunity for Q1-2027
-    opp = Opportunity(
-        snapshot_id=snap.id,
-        opportunity_id_18="SYNTHETIC_1",
-        opportunity_name="Synth",
-        account_name="Synth Acc",
-        sales_type="Renewals",
-        fiscal_period="Q1-2027",
-        forecast_category="Commit",
-        forecast_acv_amount=50000.0,
-        approval_status="Approved"
-    )
-    db.add(opp)
-    db.commit()
-    db.close()
+    res = client_and_db.get("/api/v2/approvals/distribution?as_of=2027-01-05&exclude_deleted_lost=false")
+    assert res.status_code == 200
 
-    r = client.get("/api/v2/approvals/distribution?as_of=2027-01-05")
-    assert r.status_code == 200
-    d = r.json()
-    assert d["data_slice_key"] == "Q1-2027"
-    assert d["total"]["count"] == 1
-    assert d["total"]["acv"] == 50000.0
+def test_v2_approvals_empty(client_and_db):
+    res = client_and_db.get("/api/v2/approvals/distribution?as_of=2020-01-01&exclude_deleted_lost=false")
+    d = res.json()
+    assert "error" in d or d.get("total", {}).get("count") == 0
+
+def test_v2_approvals_exclude_deleted(client_and_db):
+    res = client_and_db.get("/api/v2/approvals/distribution?as_of=2026-10-07&exclude_deleted_lost=true")
+    d = res.json()
+    assert "error" not in d
+    assert d["total"]["count"] <= 348

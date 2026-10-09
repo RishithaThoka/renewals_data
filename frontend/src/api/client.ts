@@ -375,3 +375,12 @@ export const getApprovalsDistribution = async (as_of: string, compare: string | 
   if (compare) params.compare = compare
   return api.get('/v2/approvals/distribution', { params }).then(r => r.data)
 }
+
+export const getApprovalsDeals = async (as_of: string, status?: string, category?: string, exclude_deleted_lost: boolean = false, region?: string, business_unit?: string) => {
+  const params: any = { as_of, exclude_deleted_lost }
+  if (status) params.status = status
+  if (category) params.category = category
+  if (region) params.region = region
+  if (business_unit) params.business_unit = business_unit
+  return api.get('/v2/approvals/deals', { params }).then(r => r.data)
+}

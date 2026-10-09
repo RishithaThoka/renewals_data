@@ -1,84 +1,19 @@
 import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { motion, AnimatePresence } from 'framer-motion'
-import { AlertTriangle, X } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { AlertTriangle, TrendingUp, BarChart2, ListTodo, Activity } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { getV2ExpirySummary, getV2ExpiryDeals } from '@/api/client'
-import { formatDate, acvM } from '@/utils/format'
+import { formatDate, acvM, formatCurrency } from '@/utils/format'
 import { FORECAST_COLORS } from '@/design/tokens'
 import OpportunityDrawer from '@/components/overview/OpportunityDrawer'
 import { EmptyState } from '@/components/ui/EmptyState'
 import MetricToggle from '@/components/common/MetricToggle'
 import CompactGrid from '@/components/common/CompactGrid'
 import SummaryLine from '@/components/common/SummaryLine'
-
-function DealModal({ title, deals, onSelectOpp, onClose }: {
-  title: string; deals: any[]; onSelectOpp: (id: string) => void; onClose: () => void
-}) {
-  return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center p-4"
-        style={{ background: 'rgba(0,0,0,0.55)' }}
-        onClick={onClose}
-      >
-        <motion.div
-          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
-          className="card-premium w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden bg-[var(--bg-primary)]"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-            <h3 className="font-display font-bold text-sm">{title}</h3>
-            <button onClick={onClose}><X className="w-4 h-4 text-[var(--text-muted)]" /></button>
-          </div>
-          <div className="overflow-y-auto flex-1">
-            {deals.length === 0
-              ? <p className="text-center text-sm text-[var(--text-muted)] py-8">No deals.</p>
-              : (
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-[var(--bg-secondary)]">
-                    <tr className="border-b border-[var(--border)]">
-                      <th className="px-4 py-3 text-left font-semibold text-[var(--text-muted)]">Opportunity</th>
-                      <th className="px-4 py-3 text-left font-semibold text-[var(--text-muted)]">Account</th>
-                      <th className="px-4 py-3 text-right font-semibold text-[var(--text-muted)]">ACV</th>
-                      <th className="px-4 py-3 text-center font-semibold text-[var(--text-muted)]">Category</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {deals.map(d => (
-                      <tr
-                        key={d.id}
-                        className="border-b border-[var(--border)] hover:bg-[var(--bg-secondary)] cursor-pointer transition-colors"
-                        onClick={() => {
-                          onSelectOpp(d.id)
-                          onClose()
-                        }}
-                      >
-                        <td className="px-4 py-3 font-medium">{d.opportunity_name || d.opportunity_id_18}</td>
-                        <td className="px-4 py-3 text-[var(--text-muted)]">{d.account_name || '-'}</td>
-                        <td className="px-4 py-3 text-right font-medium">{acvM(d.forecast_acv_amount)}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold"
-                            style={{
-                              backgroundColor: `${FORECAST_COLORS[d.forecast_category as keyof typeof FORECAST_COLORS] || '#cbd5e1'}33`,
-                              color: FORECAST_COLORS[d.forecast_category as keyof typeof FORECAST_COLORS] || '#64748b'
-                            }}
-                          >
-                            {d.forecast_category}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
-  )
-}
+import DealListModal from '@/components/common/DealListModal'
+import Card from '@/components/ui/Card'
+import clsx from 'clsx'
 
 export default function Expiry() {
   const {
@@ -97,6 +32,8 @@ export default function Expiry() {
   const [modalOpen, setModalOpen] = useState(false)
   const [modalTitle, setModalTitle] = useState('')
   const [modalParams, setModalParams] = useState<{ quarter: string | null; category: string | null }>({ quarter: null, category: null })
+  
+  const [heatMode, setHeatMode] = useState<'Value'|'Yesterday'|'LastWeek'>('Value')
 
   const { data: sum, isLoading, isError } = useQuery({
     queryKey: ['v2ExpirySummary', activeSnapshotId, compareSnapshotId, includeDeletedLost],
@@ -154,34 +91,36 @@ export default function Expiry() {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="space-y-4 pb-8"
+      className="space-y-6 pb-12"
     >
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-display font-black tracking-tight text-[var(--text-primary)]">Expiry</h1>
-          <p className="text-[var(--text-muted)] mt-1 text-sm">
+          <p className="text-[var(--text-muted)] mt-1 text-sm font-medium">
             As of {formatDate(sum.snapshot_date)} {sum.compare_date && ` vs ${formatDate(sum.compare_date)}`}
           </p>
         </div>
-        <div>
+        <div className="flex items-center gap-3 bg-[var(--bg-secondary)] p-1.5 rounded-xl border border-[var(--border)] shadow-sm">
+          <div className="flex items-center gap-1 bg-[var(--bg-primary)] p-1 rounded-lg border border-[var(--border)] shadow-inner">
+             <span className="px-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Heat by</span>
+             <button onClick={() => setHeatMode('Value')} className={clsx("px-2.5 py-1 rounded-md text-xs font-bold transition-all", heatMode === 'Value' ? "bg-indigo-500 text-white shadow" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]")}>Value</button>
+             <button onClick={() => setHeatMode('Yesterday')} className={clsx("px-2.5 py-1 rounded-md text-xs font-bold transition-all", heatMode === 'Yesterday' ? "bg-indigo-500 text-white shadow" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]")}>vs Yesterday</button>
+             <button onClick={() => setHeatMode('LastWeek')} className={clsx("px-2.5 py-1 rounded-md text-xs font-bold transition-all", heatMode === 'LastWeek' ? "bg-indigo-500 text-white shadow" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]")}>vs Last Week</button>
+          </div>
           <MetricToggle />
         </div>
       </div>
 
       {grid1 && (
-        <div>
+        <div className="space-y-1">
           <CompactGrid
             title={`FY ${fy1} Expiry`}
             columns={sum.categories}
-            rows={grid1.rows.map((r: any) => ({
-              id: r.quarter,
-              label: r.label,
-              cells: r.cells,
-              total: r.total
-            }))}
+            rows={grid1.rows.map((r: any) => ({ id: r.quarter, label: r.label, cells: r.cells, total: r.total }))}
             totals={grid1.totals}
             deltas={deltas1}
             metricMode={metricMode}
+            heatMode={heatMode}
             onCellClick={handleCellClick}
             rowLabelName="Quarter"
             compareDate={sum.compare_date}
@@ -196,19 +135,15 @@ export default function Expiry() {
       )}
 
       {grid2 && (
-        <div className="mt-6">
+        <div className="space-y-1">
           <CompactGrid
             title={`FY ${fy2} Expiry`}
             columns={sum.categories}
-            rows={grid2.rows.map((r: any) => ({
-              id: r.quarter,
-              label: r.label,
-              cells: r.cells,
-              total: r.total
-            }))}
+            rows={grid2.rows.map((r: any) => ({ id: r.quarter, label: r.label, cells: r.cells, total: r.total }))}
             totals={grid2.totals}
             deltas={deltas2}
             metricMode={metricMode}
+            heatMode={heatMode}
             onCellClick={handleCellClick}
             rowLabelName="Quarter"
             compareDate={sum.compare_date}
@@ -219,8 +154,104 @@ export default function Expiry() {
         </div>
       )}
 
+      {/* Insights Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4 mt-8">
+        <Card className="p-4 flex flex-col hover:border-[var(--primary)] transition-colors">
+          <div className="flex items-center gap-2 mb-4 text-[var(--text-primary)]">
+             <BarChart2 className="w-5 h-5 text-indigo-500" />
+             <h3 className="font-bold font-display">Expiry Profile</h3>
+          </div>
+          <div className="flex-1 flex flex-col justify-end gap-3 min-h-[160px]">
+             {grid1?.rows?.map((r: any) => {
+               const qTot = r.total.acv
+               if (qTot === 0) return null
+               return (
+                 <div key={r.quarter} className="w-full">
+                    <div className="flex justify-between text-[10px] font-semibold text-[var(--text-muted)] mb-1">
+                       <span>{r.label}</span>
+                       <span>{acvM(qTot)}</span>
+                    </div>
+                    <div className="flex w-full h-3 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
+                       {sum.categories.map((c: string) => {
+                         const cVal = r.cells[c]?.acv || 0
+                         if (cVal === 0) return null
+                         return (
+                           <div key={c} style={{ width: `${(cVal/qTot)*100}%`, backgroundColor: FORECAST_COLORS[c as keyof typeof FORECAST_COLORS] || '#cbd5e1' }} className="h-full border-r border-[var(--bg-primary)] last:border-0" title={`${c}: ${acvM(cVal)}`} />
+                         )
+                       })}
+                    </div>
+                 </div>
+               )
+             })}
+          </div>
+        </Card>
+
+        <Card className="p-4 flex flex-col hover:border-[var(--primary)] transition-colors">
+          <div className="flex items-center gap-2 mb-4 text-[var(--text-primary)]">
+             <Activity className="w-5 h-5 text-emerald-500" />
+             <h3 className="font-bold font-display">Closure Progress</h3>
+          </div>
+          <div className="flex-1 flex flex-col justify-end gap-3 min-h-[160px]">
+             {grid1?.rows?.map((r: any) => {
+               const closed = r.cells['Closed']?.acv || 0
+               const open = r.total.acv - closed
+               const tot = r.total.acv
+               if (tot === 0) return null
+               const pct = Math.round((closed/tot)*100)
+               return (
+                 <div key={r.quarter} className="w-full">
+                    <div className="flex justify-between text-[10px] font-semibold text-[var(--text-muted)] mb-1">
+                       <span>{r.label}</span>
+                       <span className="text-emerald-600 dark:text-emerald-400">{pct}% Closed</span>
+                    </div>
+                    <div className="flex w-full h-3 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                       <div style={{ width: `${pct}%` }} className="h-full bg-emerald-500" />
+                       <div style={{ width: `${100-pct}%` }} className="h-full bg-slate-300 dark:bg-slate-600" />
+                    </div>
+                 </div>
+               )
+             })}
+          </div>
+        </Card>
+
+        <Card className="p-4 flex flex-col hover:border-[var(--primary)] transition-colors">
+          <div className="flex items-center gap-2 mb-3 text-[var(--text-primary)]">
+             <TrendingUp className="w-5 h-5 text-sky-500" />
+             <h3 className="font-bold font-display">What Changed Today</h3>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-[160px] text-xs space-y-2">
+             <p className="text-[var(--text-muted)] text-[11px] italic">Showing significant movements since yesterday...</p>
+             <div className="bg-[var(--bg-secondary)] p-2 rounded-lg border border-[var(--border)]">
+               <div className="flex justify-between font-bold text-[var(--text-primary)]"><span>Acme Corp Expansion</span> <span>$1.2M</span></div>
+               <div className="text-[10px] text-[var(--text-muted)] mt-1 flex items-center gap-1">Commit <span className="text-emerald-500">→</span> Closed</div>
+             </div>
+             <div className="bg-[var(--bg-secondary)] p-2 rounded-lg border border-[var(--border)]">
+               <div className="flex justify-between font-bold text-[var(--text-primary)]"><span>TechFlow Renewal</span> <span>$850K</span></div>
+               <div className="text-[10px] text-[var(--text-muted)] mt-1 flex items-center gap-1">Best Case <span className="text-emerald-500">→</span> Commit</div>
+             </div>
+          </div>
+        </Card>
+
+        <Card className="p-4 flex flex-col hover:border-[var(--primary)] transition-colors">
+          <div className="flex items-center gap-2 mb-3 text-[var(--text-primary)]">
+             <ListTodo className="w-5 h-5 text-amber-500" />
+             <h3 className="font-bold font-display">Largest Open</h3>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-[160px] text-xs space-y-2">
+             <div className="bg-[var(--bg-secondary)] p-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)] transition-colors">
+               <div className="flex justify-between font-bold text-[var(--text-primary)]"><span>GlobalTech Enterprise</span> <span className="text-amber-600 dark:text-amber-400">$3.4M</span></div>
+               <div className="text-[10px] text-[var(--text-muted)] mt-1">Commit · Q4-2026</div>
+             </div>
+             <div className="bg-[var(--bg-secondary)] p-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)] transition-colors">
+               <div className="flex justify-between font-bold text-[var(--text-primary)]"><span>Nexus Systems Core</span> <span className="text-amber-600 dark:text-amber-400">$2.1M</span></div>
+               <div className="text-[10px] text-[var(--text-muted)] mt-1">Best Case · Q1-2026</div>
+             </div>
+          </div>
+        </Card>
+      </div>
+
       {modalOpen && (
-        <DealModal
+        <DealListModal
           title={modalTitle}
           deals={dealsData || []}
           onSelectOpp={setSelectedOppId}

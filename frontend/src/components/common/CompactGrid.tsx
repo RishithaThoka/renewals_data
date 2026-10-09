@@ -37,23 +37,33 @@ export interface CompactGridProps {
   onCellClick: (rowId: string | null, colId: string | null, title: string) => void
   rowLabelName?: string
   compareDate?: string | null
+  heatMode?: 'Value' | 'Yesterday' | 'LastWeek'
 }
 
 export default function CompactGrid({
-  title, columns, rows, totals, deltas, metricMode, onCellClick, rowLabelName = 'Row', compareDate
+  title, columns, rows, totals, deltas, metricMode, onCellClick, rowLabelName = 'Row', compareDate, heatMode = 'Value'
 }: CompactGridProps) {
   
   // 1. Hide zero columns
   const activeColumns = columns.filter(c => (totals.category[c]?.count || 0) > 0 || (totals.category[c]?.acv || 0) > 0)
 
-  // 2. Max value for heatmap
+  // 2. Max value/delta for heatmap
   let maxVal = 0
+  let maxAbsDelta = 0
   rows.forEach(r => {
     activeColumns.forEach(c => {
       const cell = r.cells[c]
       if (cell) {
         const val = metricMode === 'Count' ? cell.count : cell.acv
         if (val > maxVal) maxVal = val
+      }
+      if (heatMode === 'Yesterday' || heatMode === 'LastWeek') {
+        const dObj = heatMode === 'Yesterday' ? deltas?.yesterday : deltas?.lastweek
+        const dCell = dObj?.matrix?.[r.id]?.[c]
+        if (dCell) {
+          const dv = metricMode === 'Count' ? dCell.count : dCell.acv
+          if (Math.abs(dv) > maxAbsDelta) maxAbsDelta = Math.abs(dv)
+        }
       }
     })
   })
@@ -129,16 +139,58 @@ export default function CompactGrid({
                 {activeColumns.map(c => {
                   const cell = r.cells[c] || { count: 0, acv: 0 }
                   const val = metricMode === 'Count' ? cell.count : cell.acv
-                  const ratio = maxVal > 0 ? val / maxVal : 0
-                  const bgOpacity = Math.min(ratio * 0.15, 0.15) // lighter single hue
+                  
+                  let bgColor = ''
+                  let cellContent = renderVal(cell.count, cell.acv)
+                  
+                  if (heatMode === 'Value') {
+                    const ratio = maxVal > 0 ? val / maxVal : 0
+                    const intensity = Math.min(ratio * 0.4, 0.4)
+                    if (val > 0) bgColor = `rgba(14, 165, 233, ${intensity})` // pale teal -> deep blue scale
+                  } else {
+                    // Change mode
+                    const dObj = heatMode === 'Yesterday' ? deltas?.yesterday : deltas?.lastweek
+                    const dCell = dObj?.matrix?.[r.id]?.[c] || { count: 0, acv: 0 }
+                    const dVal = metricMode === 'Count' ? dCell.count : dCell.acv
+                    if (dVal !== 0) {
+                      const ratio = maxAbsDelta > 0 ? Math.abs(dVal) / maxAbsDelta : 0
+                      const intensity = Math.min(ratio * 0.5, 0.5)
+                      bgColor = dVal > 0 ? `rgba(16, 185, 129, ${intensity})` : `rgba(239, 68, 68, ${intensity})`
+                      
+                      // Text: delta main, current value small
+                      const sign = dVal > 0 ? '+' : ''
+                      cellContent = (
+                        <div className="flex flex-col items-center leading-tight">
+                          <span className="font-bold text-[var(--text-primary)]">
+                            {sign}{metricMode === 'Count' ? dVal : acvM(dVal)}
+                          </span>
+                          <span className="text-[9px] text-[var(--text-muted)] opacity-80 mt-0.5">
+                            {renderVal(cell.count, cell.acv)}
+                          </span>
+                        </div>
+                      )
+                    } else if (val > 0) {
+                       cellContent = (
+                        <div className="flex flex-col items-center leading-tight">
+                          <span className="font-medium text-[var(--text-muted)] opacity-70">
+                            No change
+                          </span>
+                          <span className="text-[9px] text-[var(--text-muted)] opacity-60 mt-0.5">
+                            {renderVal(cell.count, cell.acv)}
+                          </span>
+                        </div>
+                      )
+                    }
+                  }
+
                   return (
                     <td
                       key={c}
                       onClick={() => onCellClick(r.id, c, `${r.label} - ${c}`)}
-                      className="px-3 py-1 text-center cursor-pointer transition-all hover:bg-slate-100 dark:hover:bg-slate-800 text-[var(--text-primary)] h-[36px]"
-                      style={val > 0 ? { backgroundColor: `rgba(99, 102, 241, ${bgOpacity})` } : {}}
+                      className="px-3 py-1 text-center cursor-pointer transition-all hover:ring-2 hover:ring-[var(--primary)] hover:z-10 relative text-[var(--text-primary)] h-[36px]"
+                      style={bgColor ? { backgroundColor: bgColor } : {}}
                     >
-                      {renderVal(cell.count, cell.acv)}
+                      {cellContent}
                     </td>
                   )
                 })}

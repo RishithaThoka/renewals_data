@@ -1,0 +1,327 @@
+import React, { useState, useMemo } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { X, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, FilterX } from 'lucide-react'
+import { formatCurrency, formatNumber, formatDate } from '@/utils/format'
+import { FORECAST_COLORS } from '@/design/tokens'
+
+interface Deal {
+  id: string
+  opportunity_id_18: string
+  opportunity_name: string
+  account_name: string
+  forecast_category: string
+  forecast_acv_amount: number
+  approval_status: string
+  reason_for_approval?: string
+  sub_region?: string
+  business_unit_primary?: string
+  close_date?: string
+  owner?: string
+  stage?: string
+}
+
+interface DealListModalProps {
+  title: string
+  deals: Deal[]
+  initialFilters?: {
+    forecast_category?: string | null
+    approval_status?: string | null
+    stage?: string | null
+    sub_region?: string | null
+    business_unit_primary?: string | null
+    owner?: string | null
+  }
+  onSelectOpp: (id: string) => void
+  onClose: () => void
+}
+
+export default function DealListModal({ title, deals, initialFilters, onSelectOpp, onClose }: DealListModalProps) {
+  const [search, setSearch] = useState('')
+  const [sortField, setSortField] = useState<keyof Deal | null>(null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  
+  const [filterFC, setFilterFC] = useState<string>(initialFilters?.forecast_category || 'All')
+  const [filterStatus, setFilterStatus] = useState<string>(initialFilters?.approval_status || 'All')
+  const [filterStage, setFilterStage] = useState<string>(initialFilters?.stage || 'All')
+  const [filterRegion, setFilterRegion] = useState<string>(initialFilters?.sub_region || 'All')
+  const [filterBU, setFilterBU] = useState<string>(initialFilters?.business_unit_primary || 'All')
+  const [filterOwner, setFilterOwner] = useState<string>(initialFilters?.owner || 'All')
+
+  const uniqueValues = (field: keyof Deal) => {
+    const vals = new Set(deals.map(d => d[field]).filter(Boolean) as string[])
+    return ['All', ...Array.from(vals)].sort()
+  }
+
+  const fcOptions = uniqueValues('forecast_category')
+  const statusOptions = uniqueValues('approval_status')
+  const stageOptions = uniqueValues('stage')
+  const regionOptions = uniqueValues('sub_region')
+  const buOptions = uniqueValues('business_unit_primary')
+  const ownerOptions = uniqueValues('owner')
+
+  const handleSort = (field: keyof Deal) => {
+    if (sortField === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDir('desc')
+    }
+  }
+
+  const filteredDeals = useMemo(() => {
+    let result = deals.filter(d => {
+      if (filterFC !== 'All' && d.forecast_category !== filterFC) return false
+      if (filterStatus !== 'All' && d.approval_status !== filterStatus) return false
+      if (filterStage !== 'All' && d.stage !== filterStage) return false
+      if (filterRegion !== 'All' && d.sub_region !== filterRegion) return false
+      if (filterBU !== 'All' && d.business_unit_primary !== filterBU) return false
+      if (filterOwner !== 'All' && d.owner !== filterOwner) return false
+      
+      if (search) {
+        const q = search.toLowerCase()
+        if (!d.opportunity_name?.toLowerCase().includes(q) &&
+            !d.account_name?.toLowerCase().includes(q) &&
+            !d.opportunity_id_18?.toLowerCase().includes(q) &&
+            !d.owner?.toLowerCase().includes(q)) {
+          return false
+        }
+      }
+      return true
+    })
+    
+    if (sortField) {
+      result.sort((a, b) => {
+        const valA = a[sortField] || ''
+        const valB = b[sortField] || ''
+        if (valA < valB) return sortDir === 'asc' ? -1 : 1
+        if (valA > valB) return sortDir === 'asc' ? 1 : -1
+        return 0
+      })
+    }
+    return result
+  }, [deals, search, filterFC, filterStatus, filterStage, filterRegion, filterBU, filterOwner, sortField, sortDir])
+
+  const totalAcv = filteredDeals.reduce((sum, d) => sum + (d.forecast_acv_amount || 0), 0)
+
+  const handleExport = () => {
+    const headers = ['Opportunity ID', 'Opportunity Name', 'Account', 'Forecast Category', 'Approval Status', 'ACV', 'Close Date', 'Stage', 'Region', 'BU', 'Owner']
+    const csvContent = [
+      headers.join(','),
+      ...filteredDeals.map(d => [
+        `"${d.opportunity_id_18 || ''}"`,
+        `"${(d.opportunity_name || '').replace(/"/g, '""')}"`,
+        `"${(d.account_name || '').replace(/"/g, '""')}"`,
+        `"${d.forecast_category || ''}"`,
+        `"${d.approval_status || ''}"`,
+        d.forecast_acv_amount || 0,
+        `"${d.close_date || ''}"`,
+        `"${d.stage || ''}"`,
+        `"${d.sub_region || ''}"`,
+        `"${d.business_unit_primary || ''}"`,
+        `"${d.owner || ''}"`
+      ].join(','))
+    ].join('\n')
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `deals_export_${new Date().getTime()}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const clearFilters = () => {
+    setFilterFC(initialFilters?.forecast_category || 'All')
+    setFilterStatus(initialFilters?.approval_status || 'All')
+    setFilterStage(initialFilters?.stage || 'All')
+    setFilterRegion(initialFilters?.sub_region || 'All')
+    setFilterBU(initialFilters?.business_unit_primary || 'All')
+    setFilterOwner(initialFilters?.owner || 'All')
+    setSearch('')
+  }
+  
+  const hasActiveFilters = 
+    filterFC !== (initialFilters?.forecast_category || 'All') ||
+    filterStatus !== (initialFilters?.approval_status || 'All') ||
+    filterStage !== (initialFilters?.stage || 'All') ||
+    filterRegion !== (initialFilters?.sub_region || 'All') ||
+    filterBU !== (initialFilters?.business_unit_primary || 'All') ||
+    filterOwner !== (initialFilters?.owner || 'All') ||
+    search !== ''
+    
+  const activeChips = []
+  if (filterFC !== 'All') activeChips.push({ label: 'Category', value: filterFC, onRemove: () => setFilterFC('All') })
+  if (filterStatus !== 'All') activeChips.push({ label: 'Status', value: filterStatus, onRemove: () => setFilterStatus('All') })
+  if (filterStage !== 'All') activeChips.push({ label: 'Stage', value: filterStage, onRemove: () => setFilterStage('All') })
+  if (filterRegion !== 'All') activeChips.push({ label: 'Region', value: filterRegion, onRemove: () => setFilterRegion('All') })
+  if (filterBU !== 'All') activeChips.push({ label: 'BU', value: filterBU, onRemove: () => setFilterBU('All') })
+  if (filterOwner !== 'All') activeChips.push({ label: 'Owner', value: filterOwner, onRemove: () => setFilterOwner('All') })
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+          className="w-full max-w-6xl max-h-[90vh] flex flex-col bg-[var(--bg-primary)] rounded-2xl shadow-2xl overflow-hidden border border-[var(--border)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 border-b border-[var(--border)] gap-4 bg-[var(--bg-secondary)]">
+            <div>
+              <h3 className="font-display font-black text-xl text-[var(--text-primary)] flex items-center gap-2">
+                {title}
+              </h3>
+              <p className="text-[var(--text-muted)] text-sm mt-1 font-medium">
+                Showing {formatNumber(filteredDeals.length)} deals · <span className="font-bold text-[var(--primary)]">{formatCurrency(totalAcv)}</span>
+              </p>
+              {activeChips.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {activeChips.map(chip => (
+                    <div key={chip.label} className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--border)] text-[10px] font-bold text-[var(--text-primary)]">
+                      <span className="text-[var(--text-muted)] font-medium">{chip.label}:</span> {chip.value}
+                      <button onClick={chip.onRemove} className="text-[var(--text-muted)] hover:text-[var(--primary)]"><X className="w-3 h-3" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={handleExport}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold hover:bg-[var(--bg-secondary)] hover:border-[var(--primary)] transition-all shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" /> Export CSV
+              </button>
+              <button onClick={onClose} className="p-1.5 rounded-full hover:bg-[var(--bg-primary)] text-[var(--text-muted)] transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Filters Area */}
+          <div className="p-4 border-b border-[var(--border)] bg-[var(--bg-primary)] flex flex-wrap gap-3 items-center">
+            <div className="relative flex-grow min-w-[200px] max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+              <input 
+                type="text" 
+                placeholder="Search deals..." 
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-1.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg focus:outline-none focus:border-[var(--primary)] text-[var(--text-primary)] transition-colors"
+              />
+            </div>
+            
+            <select value={filterFC} onChange={e => setFilterFC(e.target.value)} className="text-xs py-1.5 pl-2 pr-6 rounded-md bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none">
+              {fcOptions.map(o => <option key={o} value={o}>{o === 'All' ? 'All Categories' : o}</option>)}
+            </select>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="text-xs py-1.5 pl-2 pr-6 rounded-md bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none">
+              {statusOptions.map(o => <option key={o} value={o}>{o === 'All' ? 'All Statuses' : o}</option>)}
+            </select>
+            <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className="text-xs py-1.5 pl-2 pr-6 rounded-md bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none">
+              {stageOptions.map(o => <option key={o} value={o}>{o === 'All' ? 'All Stages' : o}</option>)}
+            </select>
+            <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)} className="text-xs py-1.5 pl-2 pr-6 rounded-md bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none">
+              {regionOptions.map(o => <option key={o} value={o}>{o === 'All' ? 'All Regions' : o}</option>)}
+            </select>
+            <select value={filterBU} onChange={e => setFilterBU(e.target.value)} className="text-xs py-1.5 pl-2 pr-6 rounded-md bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none">
+              {buOptions.map(o => <option key={o} value={o}>{o === 'All' ? 'All BUs' : o}</option>)}
+            </select>
+            
+            {(hasActiveFilters) && (
+              <button onClick={clearFilters} className="flex items-center gap-1.5 text-xs text-[var(--primary)] font-semibold hover:underline ml-auto whitespace-nowrap">
+                <FilterX className="w-3.5 h-3.5" /> Reset filters
+              </button>
+            )}
+          </div>
+
+          {/* Table */}
+          <div className="overflow-y-auto flex-1 bg-[var(--bg-primary)]">
+            {filteredDeals.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 px-4 text-center">
+                <div className="w-16 h-16 rounded-full bg-[var(--bg-secondary)] flex items-center justify-center mb-4">
+                  <Search className="w-8 h-8 text-[var(--text-muted)] opacity-50" />
+                </div>
+                <h4 className="text-base font-bold text-[var(--text-primary)] mb-1">No deals found</h4>
+                <p className="text-sm text-[var(--text-muted)] max-w-sm">Try adjusting your filters or search query to find what you're looking for.</p>
+              </div>
+            ) : (
+              <table className="w-full text-xs text-left whitespace-nowrap">
+                <thead className="sticky top-0 bg-[var(--bg-secondary)] border-b border-[var(--border)] shadow-sm z-10">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-primary)] group" onClick={() => handleSort('opportunity_name')}>
+                      <div className="flex items-center gap-1">Opportunity {sortField === 'opportunity_name' ? (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50" />}</div>
+                    </th>
+                    <th className="px-4 py-3 font-semibold text-[var(--text-muted)]">Account / BU</th>
+                    <th className="px-4 py-3 font-semibold text-[var(--text-muted)] text-right cursor-pointer hover:text-[var(--text-primary)] group" onClick={() => handleSort('forecast_acv_amount')}>
+                      <div className="flex items-center justify-end gap-1">ACV {sortField === 'forecast_acv_amount' ? (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50" />}</div>
+                    </th>
+                    <th className="px-4 py-3 font-semibold text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-primary)] group" onClick={() => handleSort('close_date')}>
+                      <div className="flex items-center gap-1">Close Date {sortField === 'close_date' ? (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50" />}</div>
+                    </th>
+                    <th className="px-4 py-3 font-semibold text-[var(--text-muted)] text-center">Category</th>
+                    <th className="px-4 py-3 font-semibold text-[var(--text-muted)] text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {filteredDeals.map(d => (
+                    <tr
+                      key={d.opportunity_id_18}
+                      className="hover:bg-[var(--bg-secondary)] cursor-pointer transition-colors"
+                      onClick={() => {
+                        onSelectOpp(d.opportunity_id_18)
+                        onClose()
+                      }}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-[var(--text-primary)] max-w-xs truncate" title={d.opportunity_name || d.opportunity_id_18}>
+                          {d.opportunity_name || d.opportunity_id_18}
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)] mt-0.5">{d.opportunity_id_18}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-[var(--text-primary)] max-w-[150px] truncate" title={d.account_name}>{d.account_name || '—'}</div>
+                        <div className="text-[10px] text-[var(--text-muted)] mt-0.5 max-w-[150px] truncate">{d.business_unit_primary || '—'}</div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-black text-[var(--text-primary)]">
+                        {formatCurrency(d.forecast_acv_amount)}
+                      </td>
+                      <td className="px-4 py-3 text-[var(--text-secondary)] font-medium">
+                        {formatDate(d.close_date)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="inline-block px-2.5 py-1 rounded-full text-[10px] font-bold"
+                          style={{
+                            backgroundColor: `${FORECAST_COLORS[d.forecast_category as keyof typeof FORECAST_COLORS] || '#cbd5e1'}25`,
+                            color: FORECAST_COLORS[d.forecast_category as keyof typeof FORECAST_COLORS] || '#64748b'
+                          }}
+                        >
+                          {d.forecast_category || 'Blank'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                          d.approval_status === 'Approved' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
+                          d.approval_status === 'Pending Approval' ? 'bg-amber-500/10 text-amber-600 border-amber-500/20' :
+                          'bg-slate-500/10 text-slate-600 border-slate-500/20'
+                        }`}>
+                          {d.approval_status || 'Blank'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  )
+}
