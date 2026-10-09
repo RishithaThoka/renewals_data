@@ -119,16 +119,14 @@ function HeatmapCell({
   maxAcv,
   onClick,
   isTotal = false,
-  deltaCount = null,
-  deltaAcv = null,
+  deltas,
 }: {
   count: number
   acv: number
   maxAcv: number
   onClick: () => void
   isTotal?: boolean
-  deltaCount?: number | null
-  deltaAcv?: number | null
+  deltas?: any
 }) {
   const ratio = maxAcv > 0 ? acv / maxAcv : 0
   const bgOpacity = Math.max(0, Math.min(ratio * 0.4, 0.4))
@@ -145,10 +143,29 @@ function HeatmapCell({
         <span className="text-lg font-bold text-[var(--text-primary)]">{count}</span>
         <span className="text-xs text-[var(--text-muted)]">{acvM(acv)}</span>
         
-        {isTotal && (deltaCount != null || deltaAcv != null) && (
-          <div className="flex items-center gap-1 mt-1">
-            <DeltaBadge val={deltaCount} />
-            <AcvDelta val={deltaAcv} />
+        {isTotal && deltas && (
+          <div className="flex flex-col gap-1 mt-1">
+            {(deltas.yesterday?.count != null || deltas.yesterday?.acv != null) && (
+              <div className="flex items-center gap-1 justify-center">
+                <span className="text-[9px] text-[var(--text-muted)] w-4 text-right">1d</span>
+                <DeltaBadge val={deltas.yesterday.count} />
+                <AcvDelta val={deltas.yesterday.acv} />
+              </div>
+            )}
+            {(deltas.lastweek?.count != null || deltas.lastweek?.acv != null) && (
+              <div className="flex items-center gap-1 justify-center">
+                <span className="text-[9px] text-[var(--text-muted)] w-4 text-right">7d</span>
+                <DeltaBadge val={deltas.lastweek.count} />
+                <AcvDelta val={deltas.lastweek.acv} />
+              </div>
+            )}
+            {(deltas.custom?.count != null || deltas.custom?.acv != null) && (
+              <div className="flex items-center gap-1 justify-center">
+                <span className="text-[9px] text-[var(--text-muted)] w-4 text-right">vs</span>
+                <DeltaBadge val={deltas.custom.count} />
+                <AcvDelta val={deltas.custom.acv} />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -215,8 +232,11 @@ function ExpiryGrid({
                   maxAcv={maxAcv}
                   onClick={() => onCellClick(r.quarter, null, `${r.label} Total`)}
                   isTotal={true}
-                  deltaCount={deltas?.quarters?.[r.quarter]?.count}
-                  deltaAcv={deltas?.quarters?.[r.quarter]?.acv}
+                  deltas={{
+                    yesterday: deltas?.yesterday?.quarters?.[r.quarter],
+                    lastweek: deltas?.lastweek?.quarters?.[r.quarter],
+                    custom: deltas?.custom?.quarters?.[r.quarter]
+                  }}
                 />
               </tr>
             ))}
@@ -236,8 +256,11 @@ function ExpiryGrid({
                   maxAcv={maxAcv}
                   onClick={() => onCellClick(null, c, `FY ${yearLabel} - ${c}`)}
                   isTotal={true}
-                  deltaCount={deltas?.category?.[c]?.count}
-                  deltaAcv={deltas?.category?.[c]?.acv}
+                  deltas={{
+                    yesterday: deltas?.yesterday?.category?.[c],
+                    lastweek: deltas?.lastweek?.category?.[c],
+                    custom: deltas?.custom?.category?.[c]
+                  }}
                 />
               ))}
               <HeatmapCell
@@ -246,8 +269,11 @@ function ExpiryGrid({
                 maxAcv={maxAcv}
                 onClick={() => onCellClick(null, null, `FY ${yearLabel} Grand Total`)}
                 isTotal={true}
-                deltaCount={deltas?.grand?.count}
-                deltaAcv={deltas?.grand?.acv}
+                deltas={{
+                  yesterday: deltas?.yesterday?.grand,
+                  lastweek: deltas?.lastweek?.grand,
+                  custom: deltas?.custom?.grand
+                }}
               />
             </tr>
           </tbody>

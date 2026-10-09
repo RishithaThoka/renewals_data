@@ -104,6 +104,12 @@ class V2ExpiryService:
         if comp_snap:
             comp_df = self._window_opps(comp_snap, target_quarter, exclude_deleted_lost)
             
+        snap_yest = self._get_snapshot(ctx, "yesterday")
+        df_yest = self._window_opps(snap_yest, target_quarter, exclude_deleted_lost) if snap_yest else pd.DataFrame()
+        
+        snap_lw = self._get_snapshot(ctx, "last_week")
+        df_lw = self._window_opps(snap_lw, target_quarter, exclude_deleted_lost) if snap_lw else pd.DataFrame()
+        
         fy1_label = str(current_y)
         fy2_label = str(next_y)
         
@@ -161,6 +167,12 @@ class V2ExpiryService:
         cgrid_current = build_grid(comp_df, fy1_label) if not comp_df.empty else build_grid(pd.DataFrame(), fy1_label)
         cgrid_next = build_grid(comp_df, fy2_label) if not comp_df.empty else build_grid(pd.DataFrame(), fy2_label)
         
+        yest_grid_current = build_grid(df_yest, fy1_label) if not df_yest.empty else build_grid(pd.DataFrame(), fy1_label)
+        yest_grid_next = build_grid(df_yest, fy2_label) if not df_yest.empty else build_grid(pd.DataFrame(), fy2_label)
+        
+        lw_grid_current = build_grid(df_lw, fy1_label) if not df_lw.empty else build_grid(pd.DataFrame(), fy1_label)
+        lw_grid_next = build_grid(df_lw, fy2_label) if not df_lw.empty else build_grid(pd.DataFrame(), fy2_label)
+        
         def compute_deltas(grid, cgrid):
             deltas = {
                 "grand": {
@@ -183,8 +195,17 @@ class V2ExpiryService:
                 }
             return deltas
             
-        deltas_current = compute_deltas(grid_current, cgrid_current) if compare else None
-        deltas_next = compute_deltas(grid_next, cgrid_next) if compare else None
+        deltas_current = {}
+        deltas_next = {}
+        if compare:
+            deltas_current["custom"] = compute_deltas(grid_current, cgrid_current)
+            deltas_next["custom"] = compute_deltas(grid_next, cgrid_next)
+        
+        deltas_current["yesterday"] = compute_deltas(grid_current, yest_grid_current)
+        deltas_current["lastweek"] = compute_deltas(grid_current, lw_grid_current)
+        
+        deltas_next["yesterday"] = compute_deltas(grid_next, yest_grid_next)
+        deltas_next["lastweek"] = compute_deltas(grid_next, lw_grid_next)
         
         _, fy_end_date = ScopeService.quarter_bounds(f"Q4-{current_y}")
         slip_df = df[df["close_date"] > fy_end_date] if not df.empty else pd.DataFrame()
