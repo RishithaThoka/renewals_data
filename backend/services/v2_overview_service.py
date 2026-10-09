@@ -100,6 +100,8 @@ def _opps_to_df(opps: list[Opportunity]) -> pd.DataFrame:
             "close_date":         o.close_date,
             "close_year":         o.close_date.year if o.close_date else None,
             "is_deleted_or_lost": bool(o.is_deleted_or_lost),
+            "fiscal_period":      o.fiscal_period or "",
+            "sales_type":         o.sales_type or "",
         })
     return pd.DataFrame(records)
 
@@ -170,18 +172,20 @@ class V2OverviewService:
         self,
         today_df: pd.DataFrame,
         prev_df: pd.DataFrame,
-        q_end_date,
+        today_all_df: pd.DataFrame,
+        target_fp: str,
     ) -> dict:
         """
         Compute forecast category and approval movements by diffing two scoped DataFrames.
-        Joins on opportunity_id_18. Only considers opps present in BOTH snapshots.
+        Joins on opportunity_id_18.
         Returns positive_moves, negative_moves, approval_moves lists.
         """
         if today_df.empty or prev_df.empty:
             return {
                 "positive": [], "negative": [], "approval": [],
                 "slippage_to_2027": {"count": 0, "acv": 0.0},
-            "proposal_confirmation_totals": prop_totals,
+                "slipped_later_quarter": {"count": 0, "acv": 0.0},
+                "slipped_earlier": {"count": 0, "acv": 0.0},
             }
 
         t = today_df.set_index("opportunity_id_18")
@@ -249,18 +253,62 @@ class V2OverviewService:
                 **_bucket_summary(deals),
             })
 
-        # Slippage: opps whose close_date is after q_end_date TODAY but was NOT after q_end_date in PREV
-        today_slipped = set(today_df[pd.to_datetime(today_df["close_date"]).dt.date > q_end_date]["opportunity_id_18"]) if not today_df.empty else set()
-        prev_slipped = set(prev_df[pd.to_datetime(prev_df["close_date"]).dt.date > q_end_date]["opportunity_id_18"]) if not prev_df.empty else set()
-        slipped_ids = today_slipped - prev_slipped
-        slip_df = today_df[today_df["opportunity_id_18"].isin(slipped_ids)] if not today_df.empty else pd.DataFrame()
-        slippage_deals = slip_df[["opportunity_id_18", "opportunity_name", "canonical_region",
-                                   "forecast_category", "forecast_acv_amount"]].to_dict(orient="records") if not slip_df.empty else []
+        # New Slippage logic
+        def _parse_fp(fp: str):
+            if not fp or '-' not in fp: return (0, 0)
+            q, y = fp.split('-')
+            return (int(y), int(q.replace('Q', '')))
+
+        target_parsed = _parse_fp(target_fp)
+        
+        slipped_next_year_deals = []
+        slipped_later_quarter_same_year_deals = []
+        slipped_earlier_quarter_deals = []
+
+        if not prev_df.empty and not today_all_df.empty:
+            t_all = today_all_df.set_index("opportunity_id_18")
+            for opp_id in p.index:
+                if opp_id in t_all.index:
+                    t_opp = t_all.loc[opp_id]
+                    t_fp = str(t_opp["fiscal_period"] if isinstance(t_opp, pd.Series) else t_opp.iloc[0]["fiscal_period"])
+                    if not t_fp or '-' not in t_fp: continue
+                    t_parsed = _parse_fp(t_fp)
+                    
+                    deal = {
+                        "opportunity_id_18": opp_id,
+                        "opportunity_name": str(t_opp["opportunity_name"] if isinstance(t_opp, pd.Series) else t_opp.iloc[0]["opportunity_name"]),
+                        "canonical_region": str(t_opp["canonical_region"] if isinstance(t_opp, pd.Series) else t_opp.iloc[0]["canonical_region"]),
+                        "forecast_category": str(t_opp["forecast_category"] if isinstance(t_opp, pd.Series) else t_opp.iloc[0]["forecast_category"]),
+                        "forecast_acv_amount": float(t_opp["forecast_acv_amount"] if isinstance(t_opp, pd.Series) else t_opp.iloc[0]["forecast_acv_amount"]),
+                        "fiscal_period": t_fp,
+                    }
+                    
+                    if t_parsed[0] > target_parsed[0]:
+                        slipped_next_year_deals.append(deal)
+                    elif t_parsed[0] == target_parsed[0] and t_parsed[1] > target_parsed[1]:
+                        slipped_later_quarter_same_year_deals.append(deal)
+                    elif t_parsed < target_parsed:
+                        slipped_earlier_quarter_deals.append(deal)
+
         slippage = {
-            "label": "Slippage",
-            "count": len(slip_df),
-            "acv": round(_sum(slip_df, "forecast_acv_amount"), 2) if not slip_df.empty else 0.0,
-            "deals": slippage_deals,
+            "label": "Slipped to next year",
+            "count": len(slipped_next_year_deals),
+            "acv": round(sum(d["forecast_acv_amount"] for d in slipped_next_year_deals), 2),
+            "deals": slipped_next_year_deals,
+        }
+        
+        later_q = {
+            "label": "Slipped to a later quarter, same year",
+            "count": len(slipped_later_quarter_same_year_deals),
+            "acv": round(sum(d["forecast_acv_amount"] for d in slipped_later_quarter_same_year_deals), 2),
+            "deals": slipped_later_quarter_same_year_deals,
+        }
+        
+        earlier_q = {
+            "label": "Moved to earlier quarter",
+            "count": len(slipped_earlier_quarter_deals),
+            "acv": round(sum(d["forecast_acv_amount"] for d in slipped_earlier_quarter_deals), 2),
+            "deals": slipped_earlier_quarter_deals,
         }
 
         # Append slippage as the third negative row
@@ -270,7 +318,9 @@ class V2OverviewService:
             "positive": positive,
             "negative": negative,
             "approval": approval_moves,
-            "slippage_to_2027": slippage,  # kept for backward-compat
+            "slippage_to_2027": slippage,
+            "slipped_later_quarter": later_q,
+            "slipped_earlier": earlier_q,
         }
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -435,14 +485,24 @@ class V2OverviewService:
                 "compare_date": None,
                 "positive": [], "negative": [], "approval": [],
                 "slippage_to_2027": {"count": 0, "acv": 0.0},
-            "proposal_confirmation_totals": prop_totals,
+                "slipped_later_quarter": {"count": 0, "acv": 0.0},
+                "slipped_earlier": {"count": 0, "acv": 0.0},
             }
 
         prev_opps = self._q4_opps(prev_snap, exclude_deleted=exclude_deleted)
         prev_df   = _opps_to_df(prev_opps)
 
-        _, q_end_date = ScopeService.quarter_bounds(ScopeService.current_quarter(snap.snapshot_date))
-        moves = self._movements(today_df, prev_df, q_end_date=q_end_date)
+        # Get ALL renewals opps for today to see where prev_df deals went
+        q = self.db.query(Opportunity).filter(
+            Opportunity.snapshot_id == snap.id,
+            ScopeService.is_renewals()
+        )
+        if exclude_deleted:
+            q = q.filter(Opportunity.is_deleted_or_lost == False)
+        today_all_df = _opps_to_df(q.all())
+
+        target_fp = ScopeService.current_quarter(snap.snapshot_date)
+        moves = self._movements(today_df, prev_df, today_all_df, target_fp)
         return {
             "compare": compare,
             "compare_date": prev_snap.snapshot_date.isoformat(),

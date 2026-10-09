@@ -1,4 +1,7 @@
 import { Outlet } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle } from 'lucide-react'
+import { api } from '@/lib/api'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 import CommandPalette from './CommandPalette'
@@ -15,6 +18,15 @@ export default function Shell() {
   const selectedOppId = useAppStore(s => s.selectedOppId)
   const setSelectedOppId = useAppStore(s => s.setSelectedOppId)
 
+  const { data: dbHealth } = useQuery({
+    queryKey: ['dbHealth'],
+    queryFn: async () => {
+      const res = await api.get('/api/health/db')
+      return res.data
+    },
+    staleTime: 60000 * 5, // 5 minutes
+  })
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -30,6 +42,12 @@ export default function Shell() {
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {dbHealth?.is_legacy && (
+          <div className="bg-amber-100 text-amber-900 px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-amber-200 z-50">
+            <AlertTriangle className="w-4 h-4" />
+            Warning: The connected database was created by an older version of the app. Please re-upload the latest Excel snapshots for full compatibility.
+          </div>
+        )}
         <Topbar />
         <main className="flex-1 overflow-y-auto p-6">
           <ErrorBoundary>

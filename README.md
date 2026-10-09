@@ -33,6 +33,12 @@ npm install
 npm run dev
 ```
 
+**Troubleshooting: Port already in use**
+If you get `[Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000)`, it means an older uvicorn backend is still running. You can kill it in PowerShell with:
+```powershell
+Get-NetTCPConnection -LocalPort 8000 | Stop-Process
+```
+
 ---
 
 ## Run Tests

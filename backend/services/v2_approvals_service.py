@@ -213,8 +213,9 @@ class V2ApprovalsService:
                 )
                 changed = merged[merged["approval_status_prev"] != merged["approval_status_curr"]].copy()
                 changed["approval_status_prev"] = changed["approval_status_prev"].fillna("New to slice")
+                changed["approval_status_curr"] = changed["approval_status_curr"].fillna("Blank")
                 
-                grouped = changed.groupby(["approval_status_prev", "approval_status_curr"]).agg(
+                grouped = changed.groupby(["approval_status_prev", "approval_status_curr"], dropna=False).agg(
                     count=("opportunity_id_18", "count"),
                     acv=("forecast_acv_amount", "sum")
                 ).reset_index()

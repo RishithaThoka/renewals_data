@@ -177,12 +177,15 @@ export default function Dashboard() {
 
   const otherCount  = summary?.other_region_count ?? 0
   const cats        = summary?.categories ?? {}
-  const slip        = summary?.slippage_to_2027 ?? { count: 0, acv: 0 }
+  const standingSlip= summary?.slippage_to_2027 ?? { count: 0, acv: 0 }
   const total       = summary?.total ?? { count: 0, acv: 0 }
 
   const pos: any[]  = movements?.positive ?? []
   const neg: any[]  = movements?.negative ?? []
   const apv: any[]  = movements?.approval ?? []
+  const movSlip     = movements?.slippage_to_2027 ?? { count: 0, acv: 0, deals: [] }
+  const slipLater   = movements?.slipped_later_quarter ?? { count: 0, acv: 0, deals: [] }
+  const slipEarlier = movements?.slipped_earlier ?? { count: 0, acv: 0, deals: [] }
   const compareDate = movements?.compare_date
 
   const posTotal = pos.reduce((s: number, r: any) => s + (r.acv ?? 0), 0)
@@ -345,30 +348,31 @@ export default function Dashboard() {
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div>
             <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-2">
-              Slippage to 2027
+              Slipped to Next Year ({movCompare === 'yesterday' ? 'vs Yesterday' : 'vs Last Week'})
             </p>
             <div className="flex items-baseline gap-3">
-              {sumLoading
+              {movLoading
                 ? <div className="h-10 w-36 skeleton-shimmer rounded" />
-                : <span className="font-display font-extrabold text-3xl tabular-nums text-amber-600 dark:text-amber-400">{acvM(slip.acv)}</span>}
-              <Pill color="amber"><AlertTriangle className="w-3 h-3" />{slip.count} Slipped Deals</Pill>
+                : (
+                  <span
+                    className="font-display font-extrabold text-3xl tabular-nums text-amber-600 dark:text-amber-400 cursor-pointer hover:underline"
+                    onClick={() => movSlip.deals?.length && setModal({ title: movSlip.label, deals: movSlip.deals })}
+                  >
+                    {acvM(movSlip.acv)}
+                  </span>
+                )}
+              <Pill color="amber"><AlertTriangle className="w-3 h-3" />{movSlip.count} Slipped Deals</Pill>
             </div>
             <p className="text-[11px] text-[var(--text-muted)] mt-2">
-              Sum of ACV for Q4 opportunities whose [Close Date] is in 2027
+              Q4 deals with a close date after the quarter end: {standingSlip.count}
             </p>
-          </div>
-          <div className="flex gap-3 flex-wrap">
-            {[
-              { label: 'vs Yesterday', delta: slip.delta_yesterday },
-              { label: 'vs Last Week', delta: slip.delta_lastweek },
-            ].map(({ label, delta }) => (
-              <div key={label} className="card-premium px-4 py-3 min-w-[145px]">
-                <p className="text-[11px] text-[var(--text-muted)] font-medium mb-2">{label}</p>
-                {delta
-                  ? <div className="flex flex-col gap-1"><DeltaBadge val={delta.count} label="deals" /><AcvDelta val={delta.acv} /></div>
-                  : <span className="text-xs text-[var(--text-muted)]">\u2014</span>}
-              </div>
-            ))}
+            {(slipLater.count > 0 || slipEarlier.count > 0) && (
+              <p className="text-[11px] text-[var(--text-muted)] mt-1">
+                {slipLater.count > 0 && <span className="cursor-pointer hover:underline" onClick={() => setModal({title: slipLater.label, deals: slipLater.deals})}>Slipped to a later quarter, same year: {slipLater.count}</span>}
+                {slipLater.count > 0 && slipEarlier.count > 0 && " | "}
+                {slipEarlier.count > 0 && <span className="cursor-pointer hover:underline" onClick={() => setModal({title: slipEarlier.label, deals: slipEarlier.deals})}>Moved to earlier quarter: {slipEarlier.count}</span>}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -428,16 +432,25 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-emerald-500/10">
+                {pos.reduce((s: number, r: any) => s + (r.count ?? 0), 0) === 0 && (
+                  <tr><td colSpan={3} className="px-4 py-2.5 text-center text-[var(--text-muted)] italic">No upgrades since {compareDate ? compareDate.substring(5,10) : 'Oct 6'}</td></tr>
+                )}
                 {pos.map((row: any, i: number) => (
                   <tr
                     key={i}
                     className="hover:bg-emerald-500/10 cursor-pointer transition-colors"
-                    onClick={() => row.deals?.length && setModal({ title: `${row.from_category} \u2192 ${row.to_category}`, deals: row.deals })}
+                    onClick={() => row.deals?.length && setModal({ title: row.label ?? `${row.from_category} \u2192 ${row.to_category}`, deals: row.deals })}
                   >
                     <td className="px-4 py-2.5 font-medium flex items-center gap-1.5">
-                      <span className="text-[var(--text-muted)]">{row.from_category}</span>
-                      <ArrowRight className="w-3 h-3 text-emerald-500 flex-shrink-0" />
-                      <span className="font-bold">{row.to_category}</span>
+                      {row.label ? (
+                        <span className="font-bold">{row.label}</span>
+                      ) : (
+                        <>
+                          <span className="text-[var(--text-muted)]">{row.from_category}</span>
+                          <ArrowRight className="w-3 h-3 text-emerald-500 flex-shrink-0" />
+                          <span className="font-bold">{row.to_category}</span>
+                        </>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">{row.count}</td>
                     <td className="px-4 py-2.5 text-right font-mono">{acvM(row.acv)}</td>
@@ -470,8 +483,10 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-red-500/10">
+                {neg.reduce((s: number, r: any) => s + (r.count ?? 0), 0) === 0 && (
+                  <tr><td colSpan={3} className="px-4 py-2.5 text-center text-[var(--text-muted)] italic">No downgrades since {compareDate ? compareDate.substring(5,10) : 'Oct 6'}</td></tr>
+                )}
                 {neg.map((row: any, i: number) => {
-                  const isSlip = row.label === 'Slippage to 2027'
                   return (
                     <tr
                       key={i}
@@ -479,10 +494,10 @@ export default function Dashboard() {
                       onClick={() => row.deals?.length && setModal({ title: row.label ?? `${row.from_category} \u2192 ${row.to_category}`, deals: row.deals })}
                     >
                       <td className="px-4 py-2.5 font-medium">
-                        {isSlip ? (
+                        {row.label ? (
                           <span className="flex items-center gap-1.5">
-                            <AlertTriangle className="w-3 h-3 text-amber-500 flex-shrink-0" />
-                            <span className="font-bold text-amber-700 dark:text-amber-400">Slippage to 2027</span>
+                            {row.label.toLowerCase().includes('slip') && <AlertTriangle className="w-3 h-3 text-amber-500 flex-shrink-0" />}
+                            <span className={row.label.toLowerCase().includes('slip') ? "font-bold text-amber-700 dark:text-amber-400" : "font-bold"}>{row.label}</span>
                           </span>
                         ) : (
                           <span className="flex items-center gap-1.5">
