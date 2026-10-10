@@ -11,6 +11,7 @@ import ApprovalsLegacy from '@/pages/ApprovalsLegacy'
 import BusinessUnits from '@/pages/BusinessUnits'
 import BusinessUnitsLegacy from '@/pages/BusinessUnitsLegacy'
 import Regions from '@/pages/Regions'
+import RegionsLegacy from '@/pages/RegionsLegacy'
 import Delayed from '@/pages/Delayed'
 import Opportunities from '@/pages/Opportunities'
 import History from '@/pages/History'
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/business-units-legacy" element={<BusinessUnitsLegacy />} />
           <Route path="/bu" element={<BusinessUnits />} />
           <Route path="/regions" element={<Regions />} />
+          <Route path="/regions-legacy" element={<RegionsLegacy />} />
           <Route path="/delayed" element={<Delayed />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/opportunities" element={<Opportunities />} />
