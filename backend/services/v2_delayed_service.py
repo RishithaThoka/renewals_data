@@ -12,9 +12,6 @@ from backend.services.scopes import ScopeService
 
 log = logging.getLogger(__name__)
 
-ALL_FC = ["Closed", "Commit", "Best Case", "Pipeline", "Blank"]
-FUNNEL_STAGES = ["Approved", "Pending Approval", "Blank"]
-
 def _parse_fp(fp: str) -> tuple[int, int]:
     """Q4-2026 -> (2026, 4)"""
     try:
@@ -92,198 +89,301 @@ class V2DelayedService:
     
     def _slice_renewals(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty: return df
-        return df[(df["sales_type"] == "Renewals") & (~df["is_deleted_or_lost"])]
+        return df[(df["sales_type"] == "Renewals")] # Deleted/Lost included by default
 
-    def _calculate_delayed_overdue(self, t_df: pd.DataFrame, p_df: pd.DataFrame, t_snap: UploadSnapshot, p_snap: UploadSnapshot) -> pd.DataFrame:
-        if p_df.empty or t_df.empty:
-            return pd.DataFrame()
-            
-        p_q4 = p_df[p_df["fiscal_period"] == ScopeService.current_quarter(t_snap.snapshot_date)]
-        if p_q4.empty:
-            return pd.DataFrame()
-            
-        t_snap_date = pd.Timestamp(t_snap.snapshot_date)
-        
-        target_parsed = _parse_fp(ScopeService.current_quarter(t_snap.snapshot_date))
-        
-        delayed_ids = []
-        push_out_days = []
-        is_overdue_flags = []
-        is_slipped_flags = []
-        
-        p_q4_indexed = p_q4.set_index("opportunity_id_18")
-        t_indexed = t_df.set_index("opportunity_id_18")
-        
-        for opp_id, p_row in p_q4_indexed.iterrows():
-            if opp_id not in t_indexed.index: continue
-            
-            t_row = t_indexed.loc[opp_id]
-            t_fp = t_row["fiscal_period"]
-            if not t_fp or '-' not in t_fp: continue
-            t_parsed = _parse_fp(t_fp)
-            
-            is_slipped = (t_parsed[0] > target_parsed[0]) or (t_parsed[0] == target_parsed[0] and t_parsed[1] > target_parsed[1])
-            is_later_close_date = pd.notna(t_row["close_date"]) and pd.notna(p_row["close_date"]) and t_row["close_date"] > p_row["close_date"]
-            
-            is_delayed = is_slipped or is_later_close_date
-            
-            # overdue: Close Date before the snapshot date and still open
-            is_overdue = pd.notna(t_row["close_date"]) and t_row["close_date"] < t_snap_date and t_row["forecast_category"] != "Closed"
-            
-            if is_delayed or is_overdue:
-                delayed_ids.append(opp_id)
-                days = 0
-                if pd.notna(t_row["close_date"]) and pd.notna(p_row["close_date"]) and t_row["close_date"] > p_row["close_date"]:
-                    days = (t_row["close_date"] - p_row["close_date"]).days
-                push_out_days.append(days)
-                is_overdue_flags.append(is_overdue)
-                is_slipped_flags.append(is_slipped)
-                
-        if not delayed_ids:
-            return pd.DataFrame()
-            
-        res_df = t_indexed.loc[delayed_ids].copy()
-        res_df["push_out_days"] = push_out_days
-        res_df["is_overdue"] = is_overdue_flags
-        res_df["is_slipped"] = is_slipped_flags
-        res_df = res_df.reset_index()
-        return res_df
-
-    def get_summary(self, as_of: str | None, compare: str | None) -> dict:
+    def _get_dataframes(self, as_of: str | None, compare: str):
         t_snap = self._active_snap(as_of)
         if not t_snap:
-            return {"error": "No snapshot"}
+            return None
             
-        p_snap = None
-        if compare == "last_week":
-            p_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=7))
-        else: # yesterday default
-            p_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=1))
+        y_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=1))
+        w_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=7))
+        
+        # Fallbacks
+        if not y_snap:
+            y_snap = self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date < t_snap.snapshot_date).order_by(UploadSnapshot.snapshot_date.desc()).first()
+        if not w_snap:
+            w_snap = y_snap
             
+        p_snap = y_snap if compare != "last_week" else w_snap
         if not p_snap:
-            p_snap = self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date < t_snap.snapshot_date).order_by(UploadSnapshot.snapshot_date.desc()).first()
-            if not p_snap:
-                return {"error": "No compare"}
+            p_snap = y_snap
+        if not y_snap:
+            return None # no history
+            
+        t_df = _opps_to_df(self._get_opps(t_snap))
+        y_df = _opps_to_df(self._get_opps(y_snap))
+        w_df = _opps_to_df(self._get_opps(w_snap))
+        
+        return {
+            "t_snap": t_snap, "y_snap": y_snap, "w_snap": w_snap, "p_snap": p_snap,
+            "t_df": t_df, "y_df": y_df, "w_df": w_df, "p_df": y_df if compare != "last_week" else w_df
+        }
 
+    def _compute_delayed_and_overdue(self, data: dict):
+        t_snap = data["t_snap"]
+        t_df = data["t_df"]
+        y_df = data["y_df"]
+        w_df = data["w_df"]
+        
+        t_ren = self._slice_renewals(t_df)
+        y_ren = self._slice_renewals(y_df)
+        w_ren = self._slice_renewals(w_df)
+        
+        target_q_str = ScopeService.current_quarter(t_snap.snapshot_date)
+        target_parsed = _parse_fp(target_q_str)
+        t_snap_date = pd.Timestamp(t_snap.snapshot_date)
+        y_snap_date = pd.Timestamp(data["y_snap"].snapshot_date)
+        w_snap_date = pd.Timestamp(data["w_snap"].snapshot_date)
+        
+        # 1. OVERDUE (based only on AS-OF)
+        # Overdue = Renewals deal in the current-quarter slice, Close Date < snapshot date, category not Closed.
+        t_q4 = t_ren[t_ren["fiscal_period"] == target_q_str]
+        overdue_df = pd.DataFrame()
+        if not t_q4.empty:
+            is_overdue = pd.notna(t_q4["close_date"]) & (t_q4["close_date"] < t_snap_date) & (t_q4["forecast_category"] != "Closed") & (~t_q4["is_deleted_or_lost"])
+            overdue_df = t_q4[is_overdue].copy()
+            overdue_df["reason"] = "Overdue"
+            overdue_df["push_out_days"] = 0
+            
+            # For each overdue deal, was it overdue yesterday? (i.e. Close Date < yesterday date and not closed yesterday)
+            y_indexed = y_ren.set_index("opportunity_id_18")
+            w_indexed = w_ren.set_index("opportunity_id_18")
+            
+            def check_overdue_hist(row, hist_idx, hist_date):
+                if row["opportunity_id_18"] not in hist_idx.index: return False
+                h = hist_idx.loc[row["opportunity_id_18"]]
+                return pd.notna(h["close_date"]) and h["close_date"] < hist_date and h["forecast_category"] != "Closed" and not h["is_deleted_or_lost"]
+                
+            overdue_df["overdue_yesterday"] = overdue_df.apply(lambda r: check_overdue_hist(r, y_indexed, y_snap_date), axis=1)
+            overdue_df["overdue_lastweek"] = overdue_df.apply(lambda r: check_overdue_hist(r, w_indexed, w_snap_date), axis=1)
+
+        # 2. DELAYED (Slipped / Later Close Date / Lost)
+        def _get_delayed_from_base(base_ren, base_snap_date):
+            base_q4 = base_ren[base_ren["fiscal_period"] == target_q_str]
+            if base_q4.empty: return pd.DataFrame()
+            base_q4 = base_q4.set_index("opportunity_id_18")
+            
+            t_indexed = t_ren.set_index("opportunity_id_18")
+            
+            res_ids = []
+            reasons = []
+            push_days = []
+            
+            for opp_id, b_row in base_q4.iterrows():
+                # Check if missing or deleted/lost
+                if opp_id not in t_indexed.index:
+                    res_ids.append(opp_id)
+                    reasons.append("Lost/removed")
+                    push_days.append(0)
+                    continue
+                    
+                t_row = t_indexed.loc[opp_id]
+                if t_row["is_deleted_or_lost"]:
+                    res_ids.append(opp_id)
+                    reasons.append("Lost/removed")
+                    push_days.append(0)
+                    continue
+                    
+                t_fp = t_row["fiscal_period"]
+                if not t_fp or '-' not in t_fp: continue
+                t_parsed = _parse_fp(t_fp)
+                
+                is_slipped = (t_parsed[0] > target_parsed[0]) or (t_parsed[0] == target_parsed[0] and t_parsed[1] > target_parsed[1])
+                is_later_close = pd.notna(t_row["close_date"]) and pd.notna(b_row["close_date"]) and t_row["close_date"] > b_row["close_date"]
+                
+                # if it's slipped, it's not in the quarter anymore, so "Slipped quarter" is the primary reason
+                # if it's in the same quarter but later close date, "Later close date"
+                if is_slipped:
+                    res_ids.append(opp_id)
+                    reasons.append("Slipped quarter")
+                    push_days.append((t_row["close_date"] - b_row["close_date"]).days if pd.notna(t_row["close_date"]) and pd.notna(b_row["close_date"]) else 0)
+                elif is_later_close:
+                    res_ids.append(opp_id)
+                    reasons.append("Later close date")
+                    push_days.append((t_row["close_date"] - b_row["close_date"]).days)
+            
+            if not res_ids: return pd.DataFrame()
+            
+            base_idx = base_q4.copy()
+            res_df = []
+            for i, oid in enumerate(res_ids):
+                row = t_indexed.loc[oid].copy() if oid in t_indexed.index else base_idx.loc[oid].copy()
+                row["opportunity_id_18"] = oid
+                row["reason"] = reasons[i]
+                row["push_out_days"] = push_days[i]
+                res_df.append(row)
+            return pd.DataFrame(res_df)
+
+        delayed_y = _get_delayed_from_base(y_ren, y_snap_date)
+        delayed_w = _get_delayed_from_base(w_ren, w_snap_date)
+        
+        return overdue_df, delayed_y, delayed_w
+
+    def get_summary(self, as_of: str | None, compare: str | None) -> dict:
+        data = self._get_dataframes(as_of, compare)
+        if not data: return {"error": "No data"}
+        
+        t_snap = data["t_snap"]
         target_q_str = ScopeService.current_quarter(t_snap.snapshot_date)
         target_q_label = ScopeService.quarter_label(target_q_str)
         
-        t_df = _opps_to_df(self._get_opps(t_snap))
-        p_df = _opps_to_df(self._get_opps(p_snap))
+        overdue_df, delayed_y, delayed_w = self._compute_delayed_and_overdue(data)
         
-        t_ren = self._slice_renewals(t_df)
-        p_ren = self._slice_renewals(p_df)
-        
-        y_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=1)) or p_snap
-        w_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=7)) or p_snap
-        
-        y_ren = self._slice_renewals(_opps_to_df(self._get_opps(y_snap))) if y_snap != p_snap else p_ren
-        w_ren = self._slice_renewals(_opps_to_df(self._get_opps(w_snap))) if w_snap != p_snap else p_ren
-        
-        delayed_y = self._calculate_delayed_overdue(t_df, y_ren, t_snap, y_snap)
-        delayed_w = self._calculate_delayed_overdue(t_df, w_ren, t_snap, w_snap)
-        
-        # Calculate summary based on current requested compare
         delayed_df = delayed_y if compare != "last_week" else delayed_w
         
-        total_count = len(delayed_df)
-        total_acv = delayed_df["forecast_acv_amount"].sum() if not delayed_df.empty else 0.0
+        # Exclude "Lost/removed" from delayed totals
+        delayed_active = delayed_df[delayed_df["reason"] != "Lost/removed"] if not delayed_df.empty else pd.DataFrame()
+        if not overdue_df.empty:
+            delayed_active = pd.concat([delayed_active, overdue_df], ignore_index=True) if not delayed_active.empty else overdue_df.copy()
+            
+        slipped_df = delayed_active[delayed_active["reason"] == "Slipped quarter"] if not delayed_active.empty else pd.DataFrame()
+        later_df = delayed_active[delayed_active["reason"] == "Later close date"] if not delayed_active.empty else pd.DataFrame()
+        lost_df = delayed_df[delayed_df["reason"] == "Lost/removed"] if not delayed_df.empty else pd.DataFrame()
         
-        overdue_df = delayed_df[delayed_df["is_overdue"]] if not delayed_df.empty else pd.DataFrame()
-        slipped_df = delayed_df[delayed_df["is_slipped"]] if not delayed_df.empty else pd.DataFrame()
-        
-        overdue_y_df = delayed_y[delayed_y["is_overdue"]] if not delayed_y.empty else pd.DataFrame()
-        overdue_w_df = delayed_w[delayed_w["is_overdue"]] if not delayed_w.empty else pd.DataFrame()
-        
-        slipped_y_df = delayed_y[delayed_y["is_slipped"]] if not delayed_y.empty else pd.DataFrame()
-        slipped_w_df = delayed_w[delayed_w["is_slipped"]] if not delayed_w.empty else pd.DataFrame()
+        d_act_y = delayed_y[delayed_y["reason"] != "Lost/removed"] if not delayed_y.empty else pd.DataFrame()
+        d_act_w = delayed_w[delayed_w["reason"] != "Lost/removed"] if not delayed_w.empty else pd.DataFrame()
 
-        def _get_deltas(df_y, df_w):
-            c_y = len(df_y)
-            c_w = len(df_w)
-            a_y = df_y["forecast_acv_amount"].sum() if not df_y.empty else 0.0
-            a_w = df_w["forecast_acv_amount"].sum() if not df_w.empty else 0.0
+        overdue_not_y = overdue_df[~overdue_df["overdue_yesterday"]] if not overdue_df.empty else pd.DataFrame()
+        overdue_not_w = overdue_df[~overdue_df["overdue_lastweek"]] if not overdue_df.empty else pd.DataFrame()
+
+        if not overdue_not_y.empty:
+            d_act_y = pd.concat([d_act_y, overdue_not_y], ignore_index=True) if not d_act_y.empty else overdue_not_y.copy()
+        if not overdue_not_w.empty:
+            d_act_w = pd.concat([d_act_w, overdue_not_w], ignore_index=True) if not d_act_w.empty else overdue_not_w.copy()
+
+        def _get_deltas(df_act_y, df_act_w):
+            c_y = len(df_act_y)
+            c_w = len(df_act_w)
+            a_y = df_act_y["forecast_acv_amount"].sum() if not df_act_y.empty else 0.0
+            a_w = df_act_w["forecast_acv_amount"].sum() if not df_act_w.empty else 0.0
             return {
-                "delta_yesterday": {"count": c_y, "acv": a_y},
-                "delta_lastweek": {"count": c_w, "acv": a_w}
+                "delayed_vs_yesterday": {"count": c_y, "acv": a_y},
+                "delayed_vs_lastweek": {"count": c_w, "acv": a_w}
             }
 
         def _aggregate_by(col: str):
             res = []
-            if delayed_df.empty: return res
-            for val in delayed_df[col].unique():
-                d = delayed_df[delayed_df[col] == val]
-                d_y = delayed_y[delayed_y[col] == val] if not delayed_y.empty else pd.DataFrame()
-                d_w = delayed_w[delayed_w[col] == val] if not delayed_w.empty else pd.DataFrame()
+            if delayed_active.empty: return res
+            for val in delayed_active[col].unique():
+                d = delayed_active[delayed_active[col] == val]
+                d_y = d_act_y[d_act_y[col] == val] if not d_act_y.empty else pd.DataFrame()
+                d_w = d_act_w[d_act_w[col] == val] if not d_act_w.empty else pd.DataFrame()
+                
+                cats = {}
+                ALL_FC = ["Commit", "Best Case", "Pipeline", "Closed", "Blank"]
+                for cat in ALL_FC:
+                    d_cat = d[d["forecast_category"] == cat]
+                    dy_cat = d_y[d_y["forecast_category"] == cat] if not d_y.empty else pd.DataFrame()
+                    dw_cat = d_w[d_w["forecast_category"] == cat] if not d_w.empty else pd.DataFrame()
+                    cats[cat] = {
+                        "count": len(d_cat),
+                        "acv": d_cat["forecast_acv_amount"].sum(),
+                        **_get_deltas(dy_cat, dw_cat)
+                    }
+                    
                 res.append({
                     "label": val,
                     "count": len(d),
                     "acv": d["forecast_acv_amount"].sum(),
                     "avg_push_out": round(d["push_out_days"].mean(), 1) if len(d) > 0 else 0,
                     "max_push_out": int(d["push_out_days"].max()) if len(d) > 0 else 0,
+                    "categories": cats,
                     **_get_deltas(d_y, d_w)
                 })
             return sorted(res, key=lambda x: x["acv"], reverse=True)
+
+        total_count = len(delayed_active)
+        total_acv = delayed_active["forecast_acv_amount"].sum() if not delayed_active.empty else 0.0
 
         return {
             "data_slice": target_q_label,
             "data_slice_key": target_q_str,
             "snapshot_date": t_snap.snapshot_date.isoformat(),
-            "compare_date": p_snap.snapshot_date.isoformat(),
-            "yesterday_date": y_snap.snapshot_date.isoformat(),
-            "lastweek_date": w_snap.snapshot_date.isoformat(),
+            "compare_date": data["p_snap"].snapshot_date.isoformat(),
+            "yesterday_date": data["y_snap"].snapshot_date.isoformat(),
+            "lastweek_date": data["w_snap"].snapshot_date.isoformat(),
             "total": {
                 "count": total_count,
                 "acv": round(total_acv, 2),
-                **_get_deltas(delayed_y, delayed_w)
+                **_get_deltas(d_act_y, d_act_w)
             },
             "overdue": {
                 "count": len(overdue_df),
                 "acv": round(overdue_df["forecast_acv_amount"].sum() if not overdue_df.empty else 0.0, 2),
-                **_get_deltas(overdue_y_df, overdue_w_df)
+                "delayed_vs_yesterday": {"count": len(overdue_not_y), "acv": round(overdue_not_y["forecast_acv_amount"].sum() if not overdue_not_y.empty else 0, 2)},
+                "delayed_vs_lastweek": {"count": len(overdue_not_w), "acv": round(overdue_not_w["forecast_acv_amount"].sum() if not overdue_not_w.empty else 0, 2)}
             },
             "slipped": {
                 "count": len(slipped_df),
                 "acv": round(slipped_df["forecast_acv_amount"].sum() if not slipped_df.empty else 0.0, 2),
-                **_get_deltas(slipped_y_df, slipped_w_df)
+                **_get_deltas(
+                    d_act_y[d_act_y["reason"] == "Slipped quarter"] if not d_act_y.empty else pd.DataFrame(),
+                    d_act_w[d_act_w["reason"] == "Slipped quarter"] if not d_act_w.empty else pd.DataFrame()
+                )
+            },
+            "later_close": {
+                "count": len(later_df),
+                "acv": round(later_df["forecast_acv_amount"].sum() if not later_df.empty else 0.0, 2),
+                **_get_deltas(
+                    d_act_y[d_act_y["reason"] == "Later close date"] if not d_act_y.empty else pd.DataFrame(),
+                    d_act_w[d_act_w["reason"] == "Later close date"] if not d_act_w.empty else pd.DataFrame()
+                )
+            },
+            "lost": {
+                "count": len(lost_df),
+                "acv": round(lost_df["forecast_acv_amount"].sum() if not lost_df.empty else 0.0, 2),
             },
             "by_region": _aggregate_by("region"),
             "by_bu": _aggregate_by("business_unit"),
             "by_category": _aggregate_by("forecast_category"),
-            "by_approval": _aggregate_by("approval_status")
+            "by_approval": _aggregate_by("approval_status"),
+            "top_deals": delayed_active.sort_values(by="forecast_acv_amount", ascending=False).head(10).fillna("").to_dict("records") if not delayed_active.empty else []
         }
 
-    def get_deals(self, as_of: str | None, compare: str | None) -> dict:
-        t_snap = self._active_snap(as_of)
-        if not t_snap:
+    def get_deals(self, as_of: str | None, compare: str | None, kind: str, region: str | None, category: str | None, status: str | None, bu: str | None) -> dict:
+        data = self._get_dataframes(as_of, compare)
+        if not data: return {"count": 0, "acv": 0.0, "deals": []}
+        
+        overdue_df, delayed_y, delayed_w = self._compute_delayed_and_overdue(data)
+        delayed_df = delayed_y if compare != "last_week" else delayed_w
+        
+        df = pd.DataFrame()
+        if kind == "overdue":
+            df = overdue_df
+        elif kind == "slipped":
+            df = delayed_df[delayed_df["reason"] == "Slipped quarter"] if not delayed_df.empty else pd.DataFrame()
+        elif kind == "later_close":
+            df = delayed_df[delayed_df["reason"] == "Later close date"] if not delayed_df.empty else pd.DataFrame()
+        elif kind == "lost":
+            df = delayed_df[delayed_df["reason"] == "Lost/removed"] if not delayed_df.empty else pd.DataFrame()
+        elif kind == "all":
+            df = delayed_df[delayed_df["reason"] != "Lost/removed"] if not delayed_df.empty else pd.DataFrame()
+            if not overdue_df.empty:
+                df = pd.concat([df, overdue_df], ignore_index=True) if not df.empty else overdue_df.copy()
+        else:
             return {"count": 0, "acv": 0.0, "deals": []}
             
-        p_snap = None
-        if compare == "last_week":
-            p_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=7))
-        else: # yesterday default
-            p_snap = self._snap_by_date(t_snap.snapshot_date - timedelta(days=1))
-            
-        if not p_snap:
-            p_snap = self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date < t_snap.snapshot_date).order_by(UploadSnapshot.snapshot_date.desc()).first()
-            if not p_snap:
-                return {"count": 0, "acv": 0.0, "deals": []}
-
-        t_df = _opps_to_df(self._get_opps(t_snap))
-        p_df = _opps_to_df(self._get_opps(p_snap))
-        
-        t_ren = self._slice_renewals(t_df)
-        p_ren = self._slice_renewals(p_df)
-        
-        delayed_df = self._calculate_delayed_overdue(t_df, p_ren, t_snap, p_snap)
-        if delayed_df.empty:
+        if df.empty:
             return {"count": 0, "acv": 0.0, "deals": []}
             
-        # Format close_date back to string for json
-        delayed_df["close_date"] = delayed_df["close_date"].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else None)
-        deals = delayed_df.to_dict("records")
+        if region and region != "All":
+            df = df[df["region"] == region]
+        if category and category != "All":
+            df = df[df["forecast_category"] == category]
+        if status and status != "All":
+            df = df[df["approval_status"] == status]
+        if bu and bu != "All":
+            df = df[df["business_unit"] == bu]
+            
+        if df.empty:
+            return {"count": 0, "acv": 0.0, "deals": []}
+            
+        df["close_date"] = df["close_date"].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else None)
+        df = df.fillna("")
+        deals = df.to_dict("records")
         return {
             "count": len(deals),
-            "acv": round(delayed_df["forecast_acv_amount"].sum(), 2),
+            "acv": round(df["forecast_acv_amount"].sum(), 2),
             "deals": deals
         }
