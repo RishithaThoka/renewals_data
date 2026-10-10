@@ -87,7 +87,12 @@ class V2ExpiryService:
         if not snap:
             return {"error": "No snapshot found"}
             
-        target_quarter = ScopeService.current_quarter(snap.snapshot_date)
+        eff_date = snap.snapshot_date
+        if as_of:
+            from datetime import date
+            try: eff_date = date.fromisoformat(as_of)
+            except ValueError: pass
+        target_quarter = ScopeService.current_quarter(eff_date)
         if not target_quarter or "-" not in target_quarter:
             return {"error": "Invalid current quarter"}
             
@@ -226,8 +231,8 @@ class V2ExpiryService:
         return {
             "snapshot_date": snap.snapshot_date.isoformat(),
             "compare_date": comp_snap.snapshot_date.isoformat() if comp_snap else None,
-            "data_slice": ScopeService.quarter_label(ScopeService.current_quarter(snap.snapshot_date)),
-            "data_slice_key": ScopeService.current_quarter(snap.snapshot_date),
+            "data_slice": ScopeService.quarter_label(target_quarter),
+            "data_slice_key": target_quarter,
             "fiscal_years": [
                 {"label": fy1_label, "quarters": [{"key": q["key"], "label": q["label"]} for q in quarters if q["fy"] == fy1_label]},
                 {"label": fy2_label, "quarters": [{"key": q["key"], "label": q["label"]} for q in quarters if q["fy"] == fy2_label]}

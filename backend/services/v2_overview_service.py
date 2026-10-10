@@ -432,8 +432,8 @@ class V2OverviewService:
         return {
             "snapshot_date":    snap.snapshot_date.isoformat(),
             "snapshot_id":      snap.id,
-            "data_slice":       ScopeService.quarter_label(ScopeService.current_quarter(snap.snapshot_date)),
-            "data_slice_key":   ScopeService.current_quarter(snap.snapshot_date),
+            "data_slice":       ScopeService.quarter_label(target_fp),
+            "data_slice_key":   target_fp,
             "exclude_deleted":  exclude_deleted,
             "other_region_count": other_count,
             # Section 1

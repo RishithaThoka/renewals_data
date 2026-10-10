@@ -233,7 +233,12 @@ class V2BusinessUnitsService:
                 "delta_lastweek": _get_grand_delta(fc, df, lw_df),
             }
 
-        target_fp = ScopeService.current_quarter(snap.snapshot_date)
+        eff_date = snap.snapshot_date
+        if as_of:
+            from datetime import date
+            try: eff_date = date.fromisoformat(as_of)
+            except ValueError: pass
+        target_fp = ScopeService.current_quarter(eff_date)
         y, q = _parse_fp(target_fp)
         fy_year = y + 1 if q >= 3 else y
         
