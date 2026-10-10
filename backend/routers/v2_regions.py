@@ -15,7 +15,7 @@ def _svc(db: Session = Depends(get_db)) -> V2RegionsService:
 def get_regions_summary(
     as_of: Optional[str] = Query(None),
     compare: Optional[str] = Query(None),
-    exclude_deleted_lost: bool = Query(True),
+    exclude_deleted_lost: bool = Query(False),
     svc: V2RegionsService = Depends(_svc),
     ctx: UserContext = Depends(get_user_context)
 ):
@@ -25,7 +25,7 @@ def get_regions_summary(
 def get_single_region_summary(
     region: str,
     as_of: Optional[str] = Query(None),
-    exclude_deleted_lost: bool = Query(True),
+    exclude_deleted_lost: bool = Query(False),
     svc: V2RegionsService = Depends(_svc),
     ctx: UserContext = Depends(get_user_context)
 ):
@@ -35,7 +35,7 @@ def get_single_region_summary(
 def get_region_movements(
     region: str,
     compare: str = Query("yesterday", pattern="^(yesterday|last_week)$"),
-    exclude_deleted_lost: bool = Query(True),
+    exclude_deleted_lost: bool = Query(False),
     svc: V2RegionsService = Depends(_svc),
     ctx: UserContext = Depends(get_user_context)
 ):
