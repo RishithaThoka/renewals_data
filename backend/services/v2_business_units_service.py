@@ -238,7 +238,11 @@ class V2BusinessUnitsService:
         fy_year = y + 1 if q >= 3 else y
         
         return {
-            "data_slice": f"Q{q} FY{str(fy_year)[2:]}",
+            "snapshot_date": snap.snapshot_date.isoformat(),
+            "compare_date": comp_snap.snapshot_date.isoformat() if comp_snap else None,
+            "yesterday_date": snap_yest.snapshot_date.isoformat() if snap_yest else None,
+            "lastweek_date": snap_lw.snapshot_date.isoformat() if snap_lw else None,
+            "data_slice": ScopeService.quarter_label(target_fp),
             "data_slice_key": target_fp,
             "total": {
                 "count": grand_count,

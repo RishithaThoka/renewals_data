@@ -117,7 +117,7 @@ class V2ExpiryService:
         for y in (current_y, next_y):
             for q in range(1, 5):
                 key = f"Q{q}-{y}"
-                label = f"Q{q} FY{str(y)[-2:]}"
+                label = ScopeService.quarter_label(key)
                 quarters.append({"key": key, "label": label, "fy": str(y)})
                 
         def build_grid(target_df: pd.DataFrame, y_label: str):
@@ -226,6 +226,8 @@ class V2ExpiryService:
         return {
             "snapshot_date": snap.snapshot_date.isoformat(),
             "compare_date": comp_snap.snapshot_date.isoformat() if comp_snap else None,
+            "data_slice": ScopeService.quarter_label(ScopeService.current_quarter(snap.snapshot_date)),
+            "data_slice_key": ScopeService.current_quarter(snap.snapshot_date),
             "fiscal_years": [
                 {"label": fy1_label, "quarters": [{"key": q["key"], "label": q["label"]} for q in quarters if q["fy"] == fy1_label]},
                 {"label": fy2_label, "quarters": [{"key": q["key"], "label": q["label"]} for q in quarters if q["fy"] == fy2_label]}

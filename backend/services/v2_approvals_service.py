@@ -259,7 +259,7 @@ class V2ApprovalsService:
             "compare_date": comp_snap.snapshot_date.isoformat() if comp_snap else None,
             "yesterday_date": snap_yest.snapshot_date.isoformat() if snap_yest else None,
             "lastweek_date": snap_lw.snapshot_date.isoformat() if snap_lw else None,
-            "data_slice": "Renewals",
+            "data_slice": ScopeService.quarter_label(target_quarter),
             "data_slice_key": target_quarter,
             "total": {
                 "count": total_count,

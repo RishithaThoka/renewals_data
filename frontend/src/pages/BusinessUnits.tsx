@@ -376,6 +376,8 @@ function BusinessUnitsContent() {
             metricMode={metricMode}
             onCellClick={handleCellClick}
             compareDate={prevDate}
+            yesterdayDate={summary.yesterday_date}
+            lastweekDate={summary.lastweek_date}
             heatMode={heatMode}
           />
         </div>

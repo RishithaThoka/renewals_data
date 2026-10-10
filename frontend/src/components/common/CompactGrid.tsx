@@ -37,11 +37,13 @@ export interface CompactGridProps {
   onCellClick: (rowId: string | null, colId: string | null, title: string) => void
   rowLabelName?: string
   compareDate?: string | null
+  yesterdayDate?: string | null
+  lastweekDate?: string | null
   heatMode?: 'Value' | 'Yesterday' | 'LastWeek'
 }
 
 export default function CompactGrid({
-  title, columns, rows, totals, deltas, metricMode, onCellClick, rowLabelName = 'Row', compareDate, heatMode = 'Value'
+  title, columns, rows, totals, deltas, metricMode, onCellClick, rowLabelName = 'Row', compareDate, yesterdayDate, lastweekDate, heatMode = 'Value'
 }: CompactGridProps) {
   
   // 1. Hide zero columns
@@ -81,25 +83,30 @@ export default function CompactGrid({
 
   const renderDeltas = (d: any) => {
     if (!d) return null
-    const isCount = metricMode === 'Count'
-    const parts = []
-    
-    // Only show "1d", "7d", or the custom label, not multiple.
-    // Actually prompt says: "if the user picks a custom compare date, show that one instead of 1d and label it with its date"
-    // And "1d +$316K · 7d +$2.28M" if standard.
+    const renderDeltaPart = (dObj: any, dateStr: string | null | undefined, fallbackLabel: string) => {
+      const hasCount = !!dObj?.count
+      const hasAcv = !!dObj?.acv
+      if (!hasCount && !hasAcv) return null
+
+      const dateLabel = dateStr ? new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : fallbackLabel
+      const countPart = formatDelta(dObj.count, true)
+      const acvPart = formatDelta(dObj.acv, false)
+      
+      const valPart = metricMode === 'Count' ? countPart : metricMode === 'Amount' ? acvPart : <>{countPart} · {acvPart}</>
+      return <span key={fallbackLabel}>vs {dateLabel} {valPart}</span>
+    }
+
     if (d.custom) {
-      const v = isCount ? d.custom.count : d.custom.acv
-      if (v != null && v !== 0) {
-        parts.push(<span key="custom">{compareDate ? compareDate.substring(5,10) : 'vs'} {formatDelta(v, isCount)}</span>)
-      }
+      const part = renderDeltaPart(d.custom, compareDate, 'Custom')
+      if (part) parts.push(part)
     } else {
       if (d.yesterday) {
-        const v = isCount ? d.yesterday.count : d.yesterday.acv
-        if (v != null && v !== 0) parts.push(<span key="1d">1d {formatDelta(v, isCount)}</span>)
+        const part = renderDeltaPart(d.yesterday, yesterdayDate, '1d')
+        if (part) parts.push(part)
       }
       if (d.lastweek) {
-        const v = isCount ? d.lastweek.count : d.lastweek.acv
-        if (v != null && v !== 0) parts.push(<span key="7d">7d {formatDelta(v, isCount)}</span>)
+        const part = renderDeltaPart(d.lastweek, lastweekDate, '7d')
+        if (part) parts.push(part)
       }
     }
     
