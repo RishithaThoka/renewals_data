@@ -58,6 +58,9 @@ def test_delayed_summary_yesterday(client_and_db):
     # Overdue should be invariant of compare in its root stats
     assert d["overdue"]["count"] == 6
     assert abs(d["overdue"]["acv"] - 228071.49) < 0.1
+    # Already overdue yesterday
+    assert d["overdue"]["delayed_vs_yesterday"]["count"] == 5
+    assert abs(d["overdue"]["delayed_vs_yesterday"]["acv"] - 226531.45) < 0.1
 
 def test_delayed_summary_last_week(client_and_db):
     client, _ = client_and_db
@@ -73,6 +76,9 @@ def test_delayed_summary_last_week(client_and_db):
     # Total delayed vs last week (slipped + later close + overdue)
     assert d["total"]["count"] == 12
     assert abs(d["total"]["acv"] - 1595630.56) < 0.1
+    
+    # Already overdue last week (0 because all 6 deals have Close Dates in Oct > Sep 30)
+    assert d["overdue"]["delayed_vs_lastweek"]["count"] == 0
 
 def test_delayed_deals_endpoint(client_and_db):
     client, _ = client_and_db
@@ -91,13 +97,18 @@ def test_delayed_deals_endpoint(client_and_db):
     
 def test_lost_deals_endpoint(client_and_db):
     client, _ = client_and_db
-    r = client.get("/api/v2/delayed/deals?compare=yesterday&kind=lost")
+    # Lost vs last week
+    r = client.get("/api/v2/delayed/deals?compare=last_week&kind=lost")
     assert r.status_code == 200
-    # "Lost vs yesterday" = 5
-    assert r.json()["count"] == 5
+    assert r.json()["count"] == 2
+    assert abs(r.json()["acv"] - 60979.95) < 0.1
 
-    r_s = client.get("/api/v2/delayed/summary?compare=yesterday")
-    assert r_s.json()["lost"]["count"] == 5
+    # Lost vs yesterday is 0
+    r_y = client.get("/api/v2/delayed/deals?compare=yesterday&kind=lost")
+    assert r_y.json()["count"] == 0
+
+    r_s = client.get("/api/v2/delayed/summary?compare=last_week")
+    assert r_s.json()["lost"]["count"] == 2
     
 def test_delayed_deals_no_snapshot(client_and_db):
     # Time travel to a date with NO compare snapshots

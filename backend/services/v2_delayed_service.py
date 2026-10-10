@@ -153,14 +153,16 @@ class V2DelayedService:
             def check_overdue_hist(row, hist_idx, hist_date):
                 if row["opportunity_id_18"] not in hist_idx.index: return False
                 h = hist_idx.loc[row["opportunity_id_18"]]
-                return pd.notna(h["close_date"]) and h["close_date"] < hist_date and h["forecast_category"] != "Closed" and not h["is_deleted_or_lost"]
+                return (pd.notna(h["close_date"]) and h["close_date"] < hist_date and 
+                        h["forecast_category"] != "Closed" and not h["is_deleted_or_lost"] and 
+                        h["fiscal_period"] == target_q_str)
                 
             overdue_df["overdue_yesterday"] = overdue_df.apply(lambda r: check_overdue_hist(r, y_indexed, y_snap_date), axis=1)
             overdue_df["overdue_lastweek"] = overdue_df.apply(lambda r: check_overdue_hist(r, w_indexed, w_snap_date), axis=1)
 
         # 2. DELAYED (Slipped / Later Close Date / Lost)
         def _get_delayed_from_base(base_ren, base_snap_date):
-            base_q4 = base_ren[base_ren["fiscal_period"] == target_q_str]
+            base_q4 = base_ren[(base_ren["fiscal_period"] == target_q_str) & (~base_ren["is_deleted_or_lost"])]
             if base_q4.empty: return pd.DataFrame()
             base_q4 = base_q4.set_index("opportunity_id_18")
             
