@@ -19,7 +19,8 @@ import CompactGrid from '@/components/common/CompactGrid'
 import MetricToggle from '@/components/common/MetricToggle'
 import SummaryLine from '@/components/common/SummaryLine'
 import ErrorBoundary from '@/components/common/ErrorBoundary'
-import { cn } from '@/utils/cn'
+
+const cn = (...classes: (string | undefined | null | false)[]) => classes.filter(Boolean).join(' ')
 
 type MetricMode = 'Amount' | 'Count' | 'Both'
 
@@ -208,7 +209,7 @@ function RegionsContent() {
             </p>
           </div>
         </div>
-        <MetricToggle mode={metricMode} onChange={setMetricMode as any} />
+        <MetricToggle />
       </div>
 
       {unmapped?.count > 0 && (
@@ -534,36 +535,60 @@ function RegionsContent() {
           <div>
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Forecast Category</h3>
             <CompactGrid
-              rows={regions}
-              rowKey="region"
-              cols={ALL_FC}
+              title="Regions (Forecast Category)"
+              rowLabelName="Region"
+              columns={ALL_FC}
+              rows={regions.map((r: any) => ({
+                label: r.region,
+                cells: r.cells,
+                total: { count: r.count, acv: r.acv }
+              }))}
+              totals={{ category: summary.totals.categories, grand: summary.total }}
+              deltas={heatMode === 'Yesterday' ? 
+                regions.reduce((acc: any, r: any) => ({...acc, [r.region]: r.delta_yesterday}), {}) :
+                heatMode === 'LastWeek' ? 
+                regions.reduce((acc: any, r: any) => ({...acc, [r.region]: r.delta_lastweek}), {}) : {}
+              }
               metricMode={metricMode}
-              heatMode={heatMode}
-              cellAccessor={(r, c) => r.cells[c]}
-              totalAccessor={(c) => summary.totals.categories[c]}
-              grandTotal={summary.total}
-              onCellClick={(r, c, v) => handleDrill(`${r.region} - ${c}`, { region: r.region, category: c })}
-              onRowClick={(r) => handleDrill(`${r.region} Deals`, { region: r.region })}
-              onColClick={(c) => handleDrill(`All Regions - ${c}`, { category: c })}
-              onGrandTotalClick={() => handleDrill(`All Regions`, {})}
+              onCellClick={(rowLabel, col) => {
+                if (!col && !rowLabel) handleDrill(`All Regions`, {})
+                else if (!col) handleDrill(`${rowLabel} Deals`, { region: rowLabel })
+                else if (!rowLabel) handleDrill(`All Regions - ${col}`, { category: col })
+                else handleDrill(`${rowLabel} - ${col}`, { region: rowLabel, category: col })
+              }}
+              compareDate={compare === 'yesterday' ? summary.yesterday_date : summary.lastweek_date}
+              yesterdayDate={summary.yesterday_date}
+              lastweekDate={summary.lastweek_date}
             />
           </div>
 
           <div>
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Approval Status</h3>
             <CompactGrid
-              rows={regions}
-              rowKey="region"
-              cols={FUNNEL_STAGES}
+              title="Regions (Approval Status)"
+              rowLabelName="Region"
+              columns={FUNNEL_STAGES}
+              rows={regions.map((r: any) => ({
+                label: r.region,
+                cells: r.approval,
+                total: { count: r.count, acv: r.acv }
+              }))}
+              totals={{ category: summary.totals.approval, grand: summary.total }}
+              deltas={heatMode === 'Yesterday' ? 
+                regions.reduce((acc: any, r: any) => ({...acc, [r.region]: r.delta_yesterday}), {}) :
+                heatMode === 'LastWeek' ? 
+                regions.reduce((acc: any, r: any) => ({...acc, [r.region]: r.delta_lastweek}), {}) : {}
+              }
               metricMode={metricMode}
-              heatMode={heatMode}
-              cellAccessor={(r, c) => r.approval[c]}
-              totalAccessor={(c) => summary.totals.approval[c]}
-              grandTotal={summary.total}
-              onCellClick={(r, c, v) => handleDrill(`${r.region} - ${c}`, { region: r.region, status: c })}
-              onRowClick={(r) => handleDrill(`${r.region} Deals`, { region: r.region })}
-              onColClick={(c) => handleDrill(`All Regions - ${c}`, { status: c })}
-              onGrandTotalClick={() => handleDrill(`All Regions`, {})}
+              onCellClick={(rowLabel, col) => {
+                if (!col && !rowLabel) handleDrill(`All Regions`, {})
+                else if (!col) handleDrill(`${rowLabel} Deals`, { region: rowLabel })
+                else if (!rowLabel) handleDrill(`All Regions - ${col}`, { status: col })
+                else handleDrill(`${rowLabel} - ${col}`, { region: rowLabel, status: col })
+              }}
+              compareDate={compare === 'yesterday' ? summary.yesterday_date : summary.lastweek_date}
+              yesterdayDate={summary.yesterday_date}
+              lastweekDate={summary.lastweek_date}
             />
           </div>
         </div>
@@ -574,20 +599,22 @@ function RegionsContent() {
         <SummaryLine key={i} primaryText={l} />
       ))}
 
-      {/* Modals */}
-      <DealListModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={modalTitle}
-        deals={dealsData?.deals || []}
-        isLoading={!dealsData}
-        count={dealsData?.count ?? 0}
-        acv={dealsData?.acv ?? 0}
-        onDealClick={(id) => setSelectedOppId(id)}
-      />
+      {modalOpen && (
+        <DealListModal
+          title={modalTitle}
+          deals={dealsData?.deals || []}
+          initialFilters={{
+            sub_region: modalFilters.region,
+            forecast_category: modalFilters.category,
+            approval_status: modalFilters.status
+          }}
+          onSelectOpp={setSelectedOppId}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
 
       <OpportunityDrawer
-        opportunityId={selectedOppId}
+        oppId={selectedOppId}
         onClose={() => setSelectedOppId(null)}
       />
     </div>
