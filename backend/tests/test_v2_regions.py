@@ -99,6 +99,22 @@ def test_regions_summary_regions(client_and_db):
     assert eur is not None
     assert eur["count"] == 158
     assert round(eur["acv"], 2) == 11103425.68
+
+    mena = next((r for r in regions if r["region"] == "Middle East and North Africa"), None)
+    assert mena is not None
+    assert mena["count"] == 50
+
+    apac = next((r for r in regions if r["region"] == "APAC"), None)
+    assert apac is not None
+    assert apac["count"] == 48
+
+    na = next((r for r in regions if r["region"] == "North America"), None)
+    assert na is not None
+    assert na["count"] == 37
+
+    latam = next((r for r in regions if r["region"] == "LATAM"), None)
+    assert latam is not None
+    assert latam["count"] == 32
     
     afr = next((r for r in regions if r["region"] == "Africa"), None)
     assert afr is not None
