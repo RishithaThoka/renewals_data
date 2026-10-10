@@ -67,8 +67,8 @@ def _opps_to_df(opps: list[Opportunity]) -> pd.DataFrame:
             "fiscal_period": o.fiscal_period or "",
             "close_date": o.close_date,
             "approval_status": _norm_approval(o.approval_status),
-            "region": _map_region(o.sub_region),
-            "raw_sub_region": o.sub_region or "",
+            "region": _map_region(o.revised_sub_region),
+            "raw_sub_region": o.revised_sub_region or "",
         })
     df = pd.DataFrame(records)
     df = df.drop_duplicates(subset=["opportunity_id_18"], keep="last")

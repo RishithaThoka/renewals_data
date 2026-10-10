@@ -66,7 +66,7 @@ def client_and_db(tmp_path_factory):
                 is_deleted_or_lost=False,
                 fiscal_period="Q4-2026",
                 close_date=date(2026, 11, 15),
-                sub_region="Antarctica", # Unmapped
+                revised_sub_region="Antarctica", # Unmapped
             )
             db.add(opp)
             db.commit()
