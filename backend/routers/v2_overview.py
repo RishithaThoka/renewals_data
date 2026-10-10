@@ -17,11 +17,12 @@ def _svc(db: Session = Depends(get_db)) -> V2OverviewService:
 
 @router.get("/summary")
 def overview_summary(
+    as_of: str = Query(None),
     exclude_deleted: bool = Query(False),
     svc: V2OverviewService = Depends(_svc),
     ctx: UserContext = Depends(get_user_context),
 ):
-    return svc.get_summary(ctx, exclude_deleted=exclude_deleted)
+    return svc.get_summary(ctx, exclude_deleted=exclude_deleted, as_of=as_of)
 
 
 @router.get("/movements")

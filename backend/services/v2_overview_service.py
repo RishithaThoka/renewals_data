@@ -112,10 +112,17 @@ class V2OverviewService:
 
     # ── snapshot helpers ──────────────────────────────────────────────────────
 
-    def _active_snap(self) -> UploadSnapshot | None:
+    def _active_snap(self, as_of: str | None = None) -> UploadSnapshot | None:
+        q = self.db.query(UploadSnapshot)
+        if as_of:
+            try:
+                from datetime import date
+                d = date.fromisoformat(as_of)
+                return q.filter(UploadSnapshot.snapshot_date <= d).order_by(UploadSnapshot.snapshot_date.desc()).first()
+            except ValueError:
+                pass
         return (
-            self.db.query(UploadSnapshot)
-            .filter(UploadSnapshot.is_active_today == True)  # noqa: E712
+            q.filter(UploadSnapshot.is_active_today == True)  # noqa: E712
             .order_by(UploadSnapshot.snapshot_date.desc())
             .first()
         )
@@ -329,6 +336,7 @@ class V2OverviewService:
         self,
         ctx: UserContext,
         exclude_deleted: bool = False,
+        as_of: str | None = None
     ) -> dict:
         """
         Main Overview summary:
@@ -337,7 +345,7 @@ class V2OverviewService:
         - Section 3: Slippage to 2027
         - Snapshot metadata (date, files, uploaded_at)
         """
-        snap = self._active_snap()
+        snap = self._active_snap(as_of)
         if snap is None:
             return {"error": "no_snapshot"}
 
@@ -348,8 +356,17 @@ class V2OverviewService:
         total_acv   = round(_sum(df, "forecast_acv_amount"), 2) if not df.empty else 0.0
         cats = self._category_summary(df)
 
+        eff_date = snap.snapshot_date
+        if as_of:
+            try:
+                from datetime import date
+                eff_date = date.fromisoformat(as_of)
+            except ValueError:
+                pass
+        target_fp = ScopeService.current_quarter(eff_date)
+
         import pandas as pd
-        _, q_end_date = ScopeService.quarter_bounds(ScopeService.current_quarter(snap.snapshot_date))
+        _, q_end_date = ScopeService.quarter_bounds(target_fp)
         slip_df = df[pd.to_datetime(df["close_date"]).dt.date > q_end_date] if not df.empty else pd.DataFrame()
         slippage = {
             "count": len(slip_df),
