@@ -51,7 +51,7 @@ class V2BusinessUnitsService:
         if as_of:
             try:
                 d = date.fromisoformat(as_of)
-                return self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date == d).first()
+                return self.db.query(UploadSnapshot).filter(UploadSnapshot.snapshot_date <= d).order_by(UploadSnapshot.snapshot_date.desc()).first()
             except ValueError:
                 pass
         return (

@@ -173,6 +173,7 @@ class TestOverviewSummary:
         for ep in ["overview/summary", "expiry/summary", "approvals/distribution", "business-units/summary"]:
             r = client.get(f"/api/v2/{ep}?as_of=2027-01-05")
             assert r.status_code == 200, f"Failed {ep} time-travel"
+            print(f"JSON for {ep}: {r.json()}")
             assert r.json()["data_slice"] == "Q1 FY27"
 
 
