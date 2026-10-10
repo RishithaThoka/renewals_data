@@ -160,12 +160,20 @@ class TestOverviewSummary:
         assert dlw["count"] == Q4_TOTAL_COUNT - Q4_LASTWEEK_COUNT
         assert dlw["acv"] == pytest.approx(Q4_TOTAL_ACV - Q4_LASTWEEK_ACV, abs=ACV_ABS)
 
-    def test_data_slice_label(self, client_and_db):
+    def test_data_slice_labels_all_v2(self, client_and_db):
         client, _ = client_and_db
-        r = client.get("/api/v2/overview/summary")
-        d = r.json()
-        assert d["data_slice"] == "Q4 FY26"
-        assert d["data_slice_key"] == "Q4-2026"
+        
+        # 2026-10-07 snapshot
+        for ep in ["overview/summary", "expiry/summary", "approvals/summary", "business-units/summary"]:
+            r = client.get(f"/api/v2/{ep}")
+            assert r.status_code == 200, f"Failed {ep}"
+            assert r.json()["data_slice"] == "Q4 FY26"
+            
+        # Time-travel to 2027-01-05
+        for ep in ["overview/summary", "expiry/summary", "approvals/summary", "business-units/summary"]:
+            r = client.get(f"/api/v2/{ep}?as_of=2027-01-05")
+            assert r.status_code == 200, f"Failed {ep} time-travel"
+            assert r.json()["data_slice"] == "Q1 FY27"
 
 
 # ── SECTION 2: Approval totals (from regional breakdown) ─────────────────────
