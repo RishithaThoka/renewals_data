@@ -489,7 +489,7 @@ class V2OverviewService:
                 "slipped_earlier": {"count": 0, "acv": 0.0},
             }
 
-        prev_opps = self._q4_opps(prev_snap, exclude_deleted=exclude_deleted)
+        prev_opps = self._q4_opps(prev_snap, exclude_deleted=exclude_deleted, target_date=snap.snapshot_date)
         prev_df   = _opps_to_df(prev_opps)
 
         # Get ALL renewals opps for today to see where prev_df deals went

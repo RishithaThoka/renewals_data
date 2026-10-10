@@ -222,3 +222,42 @@ class TestOverviewMovements:
         assert d["compare"] == "last_week"
         # At minimum the endpoint must respond without error
         assert "positive" in d
+
+    def test_slippage_yesterday(self, client_and_db):
+        client, _ = client_and_db
+        r = client.get("/api/v2/overview/movements?compare=yesterday")
+        d = r.json()
+        slip = d["slippage_to_2027"]
+        assert slip["count"] == 2
+        assert slip["acv"] == pytest.approx(59514.21, abs=0.01)
+
+    def test_slippage_last_week(self, client_and_db):
+        client, _ = client_and_db
+        r = client.get("/api/v2/overview/movements?compare=last_week")
+        d = r.json()
+        
+        slip = d["slippage_to_2027"]
+        assert slip["count"] == 5
+        assert slip["acv"] == pytest.approx(1315839.07, abs=0.01)
+        
+        # Check specific IDs in slippage
+        slip_ids = {deal["opportunity_id_18"] for deal in slip["deals"]}
+        expected_ids = {
+            "006Qp00000jgO7FIAU",
+            "006Qp00000bPWXFIA4",
+            "0061K00000iGWbBQAW",
+            "006Qp00000asRzQIAU",
+            "006Qp00000asTgFIAU",
+        }
+        for eid in expected_ids:
+            assert eid in slip_ids, f"{eid} missing from slippage_to_2027"
+            
+        slipped_earlier = d["slipped_earlier"]
+        assert slipped_earlier["count"] == 1
+        assert slipped_earlier["acv"] == pytest.approx(75567.25, abs=0.01)
+        earlier_ids = {deal["opportunity_id_18"] for deal in slipped_earlier["deals"]}
+        assert "006Qp00000mTS8XIAW" in earlier_ids
+        
+        slipped_later = d["slipped_later_quarter"]
+        assert slipped_later["count"] == 0
+

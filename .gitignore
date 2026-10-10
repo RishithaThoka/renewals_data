@@ -66,3 +66,8 @@ data/sample_oct7/
 /rebrand.py
 
 /create_*.py
+
+# Ignore scratch scripts
+/*.py
+/scratch/
+
