@@ -9,7 +9,7 @@ from backend.main import app
 from backend.database import Base, get_db
 from backend.models.snapshot import UploadSnapshot
 from backend.models.opportunity import Opportunity
-from backend.services.data_ingestion import IngestionService
+
 
 @pytest.fixture(scope="module")
 def client_and_db(tmp_path_factory):
