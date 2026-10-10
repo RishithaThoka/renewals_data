@@ -236,6 +236,7 @@ class V2DelayedService:
         delayed_active = delayed_df[delayed_df["reason"] != "Lost/removed"] if not delayed_df.empty else pd.DataFrame()
         if not overdue_df.empty:
             delayed_active = pd.concat([delayed_active, overdue_df], ignore_index=True) if not delayed_active.empty else overdue_df.copy()
+            delayed_active = delayed_active.drop_duplicates(subset=["opportunity_id_18"], keep="first")
             
         slipped_df = delayed_active[delayed_active["reason"] == "Slipped quarter"] if not delayed_active.empty else pd.DataFrame()
         later_df = delayed_active[delayed_active["reason"] == "Later close date"] if not delayed_active.empty else pd.DataFrame()
@@ -246,11 +247,6 @@ class V2DelayedService:
 
         overdue_not_y = overdue_df[~overdue_df["overdue_yesterday"]] if not overdue_df.empty else pd.DataFrame()
         overdue_not_w = overdue_df[~overdue_df["overdue_lastweek"]] if not overdue_df.empty else pd.DataFrame()
-
-        if not overdue_not_y.empty:
-            d_act_y = pd.concat([d_act_y, overdue_not_y], ignore_index=True) if not d_act_y.empty else overdue_not_y.copy()
-        if not overdue_not_w.empty:
-            d_act_w = pd.concat([d_act_w, overdue_not_w], ignore_index=True) if not d_act_w.empty else overdue_not_w.copy()
 
         def _get_deltas(df_act_y, df_act_w):
             c_y = len(df_act_y)
@@ -293,6 +289,9 @@ class V2DelayedService:
                 })
             return sorted(res, key=lambda x: x["acv"], reverse=True)
 
+        overdue_y = overdue_df[overdue_df["overdue_yesterday"]] if not overdue_df.empty else pd.DataFrame()
+        overdue_w = overdue_df[overdue_df["overdue_lastweek"]] if not overdue_df.empty else pd.DataFrame()
+
         total_count = len(delayed_active)
         total_acv = delayed_active["forecast_acv_amount"].sum() if not delayed_active.empty else 0.0
 
@@ -311,8 +310,8 @@ class V2DelayedService:
             "overdue": {
                 "count": len(overdue_df),
                 "acv": round(overdue_df["forecast_acv_amount"].sum() if not overdue_df.empty else 0.0, 2),
-                "delayed_vs_yesterday": {"count": len(overdue_not_y), "acv": round(overdue_not_y["forecast_acv_amount"].sum() if not overdue_not_y.empty else 0, 2)},
-                "delayed_vs_lastweek": {"count": len(overdue_not_w), "acv": round(overdue_not_w["forecast_acv_amount"].sum() if not overdue_not_w.empty else 0, 2)}
+                "delayed_vs_yesterday": {"count": len(overdue_y), "acv": round(overdue_y["forecast_acv_amount"].sum() if not overdue_y.empty else 0, 2)},
+                "delayed_vs_lastweek": {"count": len(overdue_w), "acv": round(overdue_w["forecast_acv_amount"].sum() if not overdue_w.empty else 0, 2)}
             },
             "slipped": {
                 "count": len(slipped_df),
@@ -361,6 +360,7 @@ class V2DelayedService:
             df = delayed_df[delayed_df["reason"] != "Lost/removed"] if not delayed_df.empty else pd.DataFrame()
             if not overdue_df.empty:
                 df = pd.concat([df, overdue_df], ignore_index=True) if not df.empty else overdue_df.copy()
+                df = df.drop_duplicates(subset=["opportunity_id_18"], keep="first")
         else:
             return {"count": 0, "acv": 0.0, "deals": []}
             

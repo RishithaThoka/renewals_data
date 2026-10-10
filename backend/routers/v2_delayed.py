@@ -22,9 +22,14 @@ def get_delayed_summary(
 
 @router.get("/deals")
 def get_delayed_deals(
+    kind: str = Query("all", pattern="^(all|overdue|slipped|later_close|lost)$"),
+    region: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    bu: Optional[str] = Query(None),
     as_of: Optional[str] = Query(None),
     compare: str = Query("yesterday", pattern="^(yesterday|last_week)$"),
     svc: V2DelayedService = Depends(_svc),
     ctx: UserContext = Depends(get_user_context)
 ):
-    return svc.get_deals(as_of, compare)
+    return svc.get_deals(as_of, compare, kind, region, category, status, bu)

@@ -52,11 +52,12 @@ def test_delayed_summary_yesterday(client_and_db):
     assert d["data_slice"] == "Q4 FY26"
     assert "delayed_vs_yesterday" in d["total"]
     
-    # Just assert basic struct
-    assert isinstance(d["total"]["count"], int)
-    assert isinstance(d["total"]["acv"], float)
-    assert "lost" in d
-    assert "overdue" in d
+    assert d["slipped"]["count"] == 2
+    assert abs(d["slipped"]["acv"] - 59514.21) < 0.1
+    
+    # Overdue should be invariant of compare in its root stats
+    assert d["overdue"]["count"] == 6
+    assert abs(d["overdue"]["acv"] - 228071.49) < 0.1
 
 def test_delayed_summary_last_week(client_and_db):
     client, _ = client_and_db
@@ -66,17 +67,41 @@ def test_delayed_summary_last_week(client_and_db):
     assert d["data_slice"] == "Q4 FY26"
     assert "delayed_vs_lastweek" in d["total"]
 
-    slipped = d["slipped"]
-    assert isinstance(slipped["count"], int)
-    assert isinstance(slipped["acv"], float)
+    assert d["slipped"]["count"] == 5
+    assert abs(d["slipped"]["acv"] - 1315839.07) < 0.1
+    
+    # Total delayed vs last week (slipped + later close + overdue)
+    assert d["total"]["count"] == 12
+    assert abs(d["total"]["acv"] - 1595630.56) < 0.1
 
 def test_delayed_deals_endpoint(client_and_db):
     client, _ = client_and_db
-    # Test a combination of filters
-    r = client.get("/api/v2/delayed/deals?compare=yesterday&kind=all")
+    # Test a combination of filters to ensure they match summary output
+    r = client.get("/api/v2/delayed/deals?compare=yesterday&kind=all&region=Europe&category=Commit")
     assert r.status_code == 200
-    assert isinstance(r.json()["count"], int)
+    assert r.json()["count"] == 4
     
-    r2 = client.get("/api/v2/delayed/deals?compare=last_week&kind=slipped")
+    r2 = client.get("/api/v2/delayed/deals?compare=yesterday&kind=overdue&region=Europe&category=Commit")
     assert r2.status_code == 200
-    assert isinstance(r2.json()["count"], int)
+    assert r2.json()["count"] == 3
+
+    r3 = client.get("/api/v2/delayed/deals?compare=yesterday&kind=slipped&region=Europe&category=Commit")
+    assert r3.status_code == 200
+    assert r3.json()["count"] == 1
+    
+def test_lost_deals_endpoint(client_and_db):
+    client, _ = client_and_db
+    r = client.get("/api/v2/delayed/deals?compare=yesterday&kind=lost")
+    assert r.status_code == 200
+    # "Lost vs yesterday" = 5
+    assert r.json()["count"] == 5
+
+    r_s = client.get("/api/v2/delayed/summary?compare=yesterday")
+    assert r_s.json()["lost"]["count"] == 5
+    
+def test_delayed_deals_no_snapshot(client_and_db):
+    # Time travel to a date with NO compare snapshots
+    client, _ = client_and_db
+    r = client.get("/api/v2/delayed/deals?as_of=2000-01-01&compare=yesterday&kind=all")
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
