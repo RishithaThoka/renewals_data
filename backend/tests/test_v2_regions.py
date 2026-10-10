@@ -68,6 +68,7 @@ def client_and_db(tmp_path_factory):
                 close_date=date(2026, 11, 15),
                 revised_sub_region="Antarctica", # Unmapped
                 renewal_category="Renewal",
+                sales_type="Renewals",
             )
             db.add(opp)
             db.commit()
