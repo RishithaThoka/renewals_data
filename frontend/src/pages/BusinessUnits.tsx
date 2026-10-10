@@ -47,6 +47,18 @@ function BusinessUnitsContent() {
     },
   })
 
+  // Fetch Deals for Modal
+  const { data: dealsData } = useQuery({
+    queryKey: ['v2-bu-deals', activeSnapshotId, modalFilters],
+    queryFn: async () => {
+      const res = await api.get('/v2/business-units/deals', {
+        params: { as_of: activeSnapshotId ?? undefined, ...modalFilters }
+      })
+      return res.data
+    },
+    enabled: modalOpen
+  })
+
   // Fetch Top Opportunities
   const { data: topOppsData } = useQuery({
     queryKey: ['v2-bu-top', activeSnapshotId, topBuFilter],
@@ -217,7 +229,7 @@ function BusinessUnitsContent() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <MetricToggle mode={metricMode} onChange={setMetricMode as any} />
+          <MetricToggle />
         </div>
       </div>
 
@@ -369,7 +381,7 @@ function BusinessUnitsContent() {
         </div>
         <div className="px-4 py-2 border-t border-[var(--border)]">
           {insightLines.map((l, i) => (
-            <SummaryLine key={i} text={l} />
+            <SummaryLine key={i} primaryText={l} />
           ))}
         </div>
       </Card>
@@ -452,17 +464,21 @@ function BusinessUnitsContent() {
         </div>
       </Card>
 
-      <DealListModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={modalTitle}
-        filters={modalFilters}
-        endpoint="/api/v2/business-units/deals"
-      />
+      {modalOpen && (
+        <DealListModal
+          title={modalTitle}
+          deals={dealsData?.deals || []}
+          initialFilters={{
+            business_unit_primary: modalFilters.bu,
+            forecast_category: modalFilters.category
+          }}
+          onSelectOpp={setSelectedOppId}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
 
       <OpportunityDrawer
-        opportunityId={selectedOppId}
-        open={!!selectedOppId}
+        oppId={selectedOppId}
         onClose={() => setSelectedOppId(null)}
       />
     </div>
