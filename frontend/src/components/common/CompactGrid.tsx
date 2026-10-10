@@ -83,6 +83,7 @@ export default function CompactGrid({
 
   const renderDeltas = (d: any) => {
     if (!d) return null
+    const parts: any[] = []
     const renderDeltaPart = (dObj: any, dateStr: string | null | undefined, fallbackLabel: string) => {
       const hasCount = !!dObj?.count
       const hasAcv = !!dObj?.acv

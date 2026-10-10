@@ -239,9 +239,9 @@ class V2BusinessUnitsService:
         
         return {
             "snapshot_date": snap.snapshot_date.isoformat(),
-            "compare_date": comp_snap.snapshot_date.isoformat() if comp_snap else None,
-            "yesterday_date": snap_yest.snapshot_date.isoformat() if snap_yest else None,
-            "lastweek_date": snap_lw.snapshot_date.isoformat() if snap_lw else None,
+            "compare_date": None,
+            "yesterday_date": y_snap.snapshot_date.isoformat() if y_snap else None,
+            "lastweek_date": lw_snap.snapshot_date.isoformat() if lw_snap else None,
             "data_slice": ScopeService.quarter_label(target_fp),
             "data_slice_key": target_fp,
             "total": {
