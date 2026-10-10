@@ -205,5 +205,5 @@ def test_top_opportunities(client_and_db):
     assert deals[0]["forecast_acv_amount"] == pytest.approx(1000000.0, abs=ACV_ABS)
     assert deals[0]["forecast_category"] == "Commit"
     if len(deals) > 1:
-        assert "TPG Roaming Platform Managed Service" in deals[1]["opportunity_name"]
+        assert "TPG - Roaming Platform Managed Service" in deals[1]["opportunity_name"]
         assert deals[1]["forecast_acv_amount"] == pytest.approx(858986.59, abs=ACV_ABS)
