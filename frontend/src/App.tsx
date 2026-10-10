@@ -9,6 +9,7 @@ import ExpiryLegacy from '@/pages/ExpiryLegacy'
 import Approvals from '@/pages/Approvals'
 import ApprovalsLegacy from '@/pages/ApprovalsLegacy'
 import BusinessUnits from '@/pages/BusinessUnits'
+import BusinessUnitsLegacy from '@/pages/BusinessUnitsLegacy'
 import Regions from '@/pages/Regions'
 import Delayed from '@/pages/Delayed'
 import Opportunities from '@/pages/Opportunities'
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/approvals-legacy" element={<ApprovalsLegacy />} />
           <Route path="/business-units" element={<BusinessUnits />} />
+          <Route path="/business-units-legacy" element={<BusinessUnitsLegacy />} />
           <Route path="/bu" element={<BusinessUnits />} />
           <Route path="/regions" element={<Regions />} />
           <Route path="/delayed" element={<Delayed />} />

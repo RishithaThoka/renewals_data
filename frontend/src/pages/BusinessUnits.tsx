@@ -1,442 +1,478 @@
 import React, { useState } from 'react'
-import { motion } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2,
-  DollarSign,
-  Layers,
-  CheckCircle2,
-  Clock,
-  FileQuestion,
   AlertOctagon,
-  ChevronRight,
-  Filter,
-  BarChart3,
-  ExternalLink,
+  Search
 } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
-import { getApprovalByBu } from '@/api/client'
+import api from '@/api/client'
 import { formatACV, formatCount } from '@/utils/format'
 import Card from '@/components/ui/Card'
-import SegmentedControl from '@/components/ui/SegmentedControl'
-import Badge from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
-import OpportunitiesListDrawer from '@/components/common/OpportunitiesListDrawer'
+import DealListModal from '@/components/common/DealListModal'
 import OpportunityDrawer from '@/components/overview/OpportunityDrawer'
-import clsx from 'clsx'
+import CompactGrid from '@/components/common/CompactGrid'
+import MetricToggle from '@/components/common/MetricToggle'
+import SummaryLine from '@/components/common/SummaryLine'
+import ErrorBoundary from '@/components/common/ErrorBoundary'
 
-type BuMode = 'as_in_excel' | 'split'
+type MetricMode = 'Amount' | 'Count' | 'Both'
 
-export default function BusinessUnits() {
-  const { activeSnapshotId, snapshots } = useAppStore()
-  const [buMode, setBuMode] = useState<BuMode>('as_in_excel')
+function BusinessUnitsContent() {
+  const { activeSnapshotId } = useAppStore()
+  const metricMode = (useAppStore((s: any) => s.metricMode) || 'Amount') as MetricMode
+  const setMetricMode = useAppStore((s: any) => s.setMetricMode)
 
-  // Drilldown states
-  const [listDrawerOpen, setListDrawerOpen] = useState(false)
-  const [listDrawerTitle, setListDrawerTitle] = useState('')
-  const [listDrawerSubtitle, setListDrawerSubtitle] = useState('')
-  const [drawerFilters, setDrawerFilters] = useState<any>({})
+  const [compare, setCompare] = useState<'yesterday' | 'last_week'>('yesterday')
+  const [heatMode, setHeatMode] = useState<'Value' | 'Yesterday' | 'LastWeek'>('Value')
+  
+  // Drill-through
+  const [modalOpen, setModalOpen] = useState(false)
+  const [modalTitle, setModalTitle] = useState('')
+  const [modalFilters, setModalFilters] = useState<any>({})
+  
   const [selectedOppId, setSelectedOppId] = useState<string | null>(null)
+  const [topSearch, setTopSearch] = useState('')
+  const [topBuFilter, setTopBuFilter] = useState('All')
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['approval-by-bu', activeSnapshotId, buMode],
-    queryFn: () => getApprovalByBu(activeSnapshotId ?? undefined, buMode),
+  // Fetch Summary
+  const { data: summary, isLoading, error } = useQuery({
+    queryKey: ['v2-bu-summary', activeSnapshotId, compare],
+    queryFn: async () => {
+      const res = await api.get('/v2/business-units/summary', {
+        params: { as_of: activeSnapshotId ?? undefined, compare }
+      })
+      return res.data
+    },
   })
 
-  const rows = buMode === 'split' ? data?.split_rows || [] : data?.as_in_excel_rows || []
-  const totalRow = data?.total || {
-    business_unit: 'Total',
-    total_count: 3086,
-    acv: 450040250.54,
-    approved_count: 748,
-    approved_2nd_count: 877,
-    pending_count: 31,
-    blank_count: 1411,
-    rejected_count: 19,
-    mix: {
-      Approved: 24.2,
-      'Approved - 2nd': 28.4,
-      'Pending-Approval': 1.0,
-      Blank: 45.7,
-      Rejected: 0.6,
-    },
-  }
-
-  const activeSnap = snapshots.find((s) => s.id === activeSnapshotId)
-
-  const handleRowClick = (buName: string) => {
-    if (buMode === 'as_in_excel') {
-      setDrawerFilters({
-        snapshotId: activeSnapshotId ?? undefined,
-        businessUnitRaw: [buName],
+  // Fetch Top Opportunities
+  const { data: topOppsData } = useQuery({
+    queryKey: ['v2-bu-top', activeSnapshotId, topBuFilter],
+    queryFn: async () => {
+      const res = await api.get('/v2/business-units/top-opportunities', {
+        params: { as_of: activeSnapshotId ?? undefined, bu: topBuFilter === 'All' ? undefined : topBuFilter }
       })
-      setListDrawerTitle(`${buName} · Business Unit Deals`)
-      setListDrawerSubtitle(`Listing all renewals under Business Unit "${buName}" (Exact match)`)
-    } else {
-      setDrawerFilters({
-        snapshotId: activeSnapshotId ?? undefined,
-        businessUnit: [buName],
-      })
-      setListDrawerTitle(`${buName} · Business Unit Deals`)
-      setListDrawerSubtitle(`Listing all renewals containing Business Unit "${buName}"`)
+      return res.data
     }
-    setListDrawerOpen(true)
+  })
+
+  if (error || (summary && summary.error)) {
+    return (
+      <Card className="p-6">
+        <div className="flex items-center gap-3 text-red-500 mb-2">
+          <AlertOctagon className="w-6 h-6" />
+          <h2 className="text-lg font-bold">Error loading Business Units</h2>
+        </div>
+        <p className="text-sm text-[var(--text-muted)]">{error?.toString() || summary?.error}</p>
+      </Card>
+    )
   }
 
-  const handleStatusCellClick = (buName: string, statusKey: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    const filters: any = {
-      snapshotId: activeSnapshotId ?? undefined,
-      approvalStatus: [statusKey],
-    }
-    if (buMode === 'as_in_excel') {
-      filters.businessUnitRaw = [buName]
-    } else {
-      filters.businessUnit = [buName]
-    }
-    setDrawerFilters(filters)
-    setListDrawerTitle(`${buName} · ${statusKey} Deals`)
-    setListDrawerSubtitle(`Opportunities in ${buName} with approval status "${statusKey}"`)
-    setListDrawerOpen(true)
+  if (isLoading || !summary) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    )
   }
+
+  const { data_slice, data_slice_key, total, rows, totals, categories } = summary
+  
+  // Helpers
+  const deltaKey = compare === 'yesterday' ? 'delta_yesterday' : 'delta_lastweek'
+  const prevDate = compare === 'yesterday' ? rows[0]?.yesterday_date : rows[0]?.lastweek_date
+
+  // Handle drill through
+  const handleCellClick = (rowId: string | null, colId: string | null, title: string) => {
+    setModalTitle(title)
+    setModalFilters({
+      bu: rowId === 'Total' ? undefined : (rowId ?? undefined),
+      category: colId === 'Total' ? undefined : (colId ?? undefined),
+      as_of: activeSnapshotId ?? undefined,
+    })
+    setModalOpen(true)
+  }
+  
+  const handleDonutClick = (bu: string) => {
+    handleCellClick(bu, null, bu === 'Total' ? `All Business Units` : `${bu} · All Categories`)
+  }
+
+  const handleBarClick = (bu: string, fc: string) => {
+    handleCellClick(bu, fc, `${bu} · ${fc}`)
+  }
+
+  // Formatting for deltas
+  const fmtD = (val: number, isCount: boolean) => {
+    if (!val) return '0'
+    const sign = val > 0 ? '+' : ''
+    if (isCount) return `${sign}${val}`
+    const abs = Math.abs(val)
+    if (abs >= 1_000_000) return `${sign}$${(val / 1_000_000).toFixed(2)}M`
+    if (abs >= 1_000) return `${sign}$${(val / 1_000).toFixed(1)}K`
+    return `${sign}$${val.toFixed(0)}`
+  }
+  const deltaSpan = (d: any, isCount: boolean) => {
+    if (!d) return null
+    const v = isCount ? d.count : d.acv
+    if (!v) return null
+    const color = v > 0 ? 'text-emerald-500' : 'text-red-500'
+    return <span className={color}>{fmtD(v, isCount)}</span>
+  }
+
+  // Stat chips
+  const largestBu = rows.length > 0 ? rows[0] : null
+  const numBUs = rows.length
+  const totalCommit = totals.categories['Commit']?.acv || 0
+  const commitCov = total.acv > 0 ? ((totalCommit / total.acv) * 100).toFixed(1) : '0.0'
+  const largestBuPct = total.acv > 0 && largestBu ? ((largestBu.acv / total.acv) * 100).toFixed(1) : '0.0'
+
+  // Insight line logic
+  const sortedByAcvDelta = [...rows].sort((a, b) => (b[deltaKey]?.acv || 0) - (a[deltaKey]?.acv || 0))
+  const topMover = sortedByAcvDelta[0]
+  const insightLines = []
+  if (topMover && (topMover[deltaKey]?.acv || 0) > 0) {
+    const dtStr = new Date(prevDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    insightLines.push(`${topMover.bu} ${fmtD(topMover[deltaKey]?.count, true)} deals / ${fmtD(topMover[deltaKey]?.acv, false)} vs ${dtStr}`)
+    insightLines.push(`Largest mover vs ${dtStr}: ${topMover.bu}`)
+  } else {
+    insightLines.push(`No positive movements vs ${compare.replace('_', ' ')}`)
+  }
+
+  // Build grid data
+  const gridRows = rows.map((r: any) => ({
+    id: r.bu,
+    label: r.bu,
+    cells: r.cells,
+    total: { count: r.count, acv: r.acv }
+  }))
+  const gridDeltas = {
+    category: totals.categories,
+    grand: totals.grand,
+    rows: Object.fromEntries(rows.map((r: any) => [r.bu, {
+      delta_yesterday: r.delta_yesterday,
+      delta_lastweek: r.delta_lastweek,
+      cells: Object.fromEntries(categories.map((c: string) => [c, {
+        delta_yesterday: r.cells[c]?.delta_yesterday,
+        delta_lastweek: r.cells[c]?.delta_lastweek,
+      }]))
+    }]))
+  }
+
+  // Filter deals by search
+  const deals = topOppsData?.deals || []
+  const filteredDeals = deals.filter((d: any) => 
+    d.opportunity_name?.toLowerCase().includes(topSearch.toLowerCase()) ||
+    d.account_name?.toLowerCase().includes(topSearch.toLowerCase())
+  )
+
+  // Chart Colors
+  const catColors: Record<string, string> = {
+    'Closed': '#10b981',
+    'Commit': '#0284c7',
+    'Best Case': '#8b5cf6',
+    'Pipeline': '#f59e0b',
+    'Blank': '#64748b'
+  }
+  const donutColors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1']
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Title Header & Mode Toggle */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400">
+            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
               <Building2 className="w-5 h-5" />
             </div>
             <div>
               <h1 className="text-2xl font-black font-display tracking-tight text-[var(--text-primary)]">
-                Business Unit Matrix
+                Business Units
               </h1>
-              <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                Renewals portfolio and approval status distribution segmented across organizational Business Units
-              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="px-2 py-0.5 rounded-md bg-[var(--bg-muted)] text-[var(--text-secondary)] text-xs font-medium">
+                  {data_slice}
+                </span>
+                <span className="text-xs text-[var(--text-muted)]">
+                  Compare:
+                </span>
+                <div className="flex bg-[var(--bg-muted)] rounded-md p-0.5">
+                  <button
+                    onClick={() => setCompare('yesterday')}
+                    className={`px-2 py-0.5 text-[10px] rounded-sm font-medium transition-colors ${compare === 'yesterday' ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
+                  >
+                    vs Yesterday
+                  </button>
+                  <button
+                    onClick={() => setCompare('last_week')}
+                    className={`px-2 py-0.5 text-[10px] rounded-sm font-medium transition-colors ${compare === 'last_week' ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
+                  >
+                    vs Last Week
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-
-        {/* View Mode Toggle: As in Excel vs Split */}
         <div className="flex items-center gap-3">
-          <SegmentedControl
-            options={[
-              { value: 'as_in_excel', label: 'As in Excel (16 rows)' },
-              { value: 'split', label: 'Split by individual BU' },
-            ]}
-            value={buMode}
-            onChange={(v) => setBuMode(v as BuMode)}
-            size="sm"
+          <MetricToggle mode={metricMode} onChange={setMetricMode as any} />
+        </div>
+      </div>
+
+      {/* KPI Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card className="p-3.5 border-l-4 border-l-indigo-500">
+          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Total Value</div>
+          <div className="text-xl font-black font-display text-[var(--text-primary)] mt-1">{formatACV(total.acv)}</div>
+          <div className="text-xs text-[var(--text-secondary)] mt-1 font-medium">{formatCount(total.count)} deals</div>
+          <div className="flex gap-2 text-[10px] mt-2">
+            <span>Yday: {deltaSpan(totals.grand.delta_yesterday, false)}</span>
+            <span>Wk: {deltaSpan(totals.grand.delta_lastweek, false)}</span>
+          </div>
+        </Card>
+        <Card className="p-3.5 border-l-4 border-l-violet-500">
+          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Business Units</div>
+          <div className="text-xl font-black font-display text-[var(--text-primary)] mt-1">{numBUs}</div>
+          <div className="text-xs text-[var(--text-secondary)] mt-1 font-medium">active in {data_slice}</div>
+        </Card>
+        <Card className="p-3.5 border-l-4 border-l-pink-500">
+          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Largest BU</div>
+          <div className="text-xl font-black font-display text-[var(--text-primary)] mt-1 truncate">{largestBu?.bu || '-'}</div>
+          <div className="text-xs text-[var(--text-secondary)] mt-1 font-medium">{largestBuPct}% of total ACV</div>
+          <div className="flex gap-2 text-[10px] mt-2">
+            <span>Yday: {deltaSpan(largestBu?.delta_yesterday, false)}</span>
+            <span>Wk: {deltaSpan(largestBu?.delta_lastweek, false)}</span>
+          </div>
+        </Card>
+        <Card className="p-3.5 border-l-4 border-l-sky-500">
+          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Commit Coverage</div>
+          <div className="text-xl font-black font-display text-[var(--text-primary)] mt-1">{commitCov}%</div>
+          <div className="text-xs text-[var(--text-secondary)] mt-1 font-medium">Commit / Total ACV</div>
+          <div className="flex gap-2 text-[10px] mt-2">
+            <span>Yday: {deltaSpan(totals.categories['Commit']?.delta_yesterday, false)}</span>
+            <span>Wk: {deltaSpan(totals.categories['Commit']?.delta_lastweek, false)}</span>
+          </div>
+        </Card>
+      </div>
+
+      {/* Chart Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Horizontal Stacked Bar */}
+        <Card className="p-4 lg:col-span-2 flex flex-col min-h-[300px]">
+          <h3 className="text-sm font-bold text-[var(--text-secondary)] mb-4">BU Forecast Distribution</h3>
+          <div className="flex-1 flex flex-col gap-3 justify-center">
+            {rows.map((r: any) => {
+              const maxVal = metricMode === 'Count' ? total.count : total.acv
+              const rVal = metricMode === 'Count' ? r.count : r.acv
+              const widthPct = maxVal > 0 ? (rVal / maxVal) * 100 : 0
+              if (widthPct === 0) return null
+
+              return (
+                <div key={r.bu} className="flex items-center gap-3">
+                  <div className="w-24 shrink-0 text-xs font-medium text-[var(--text-secondary)] truncate text-right cursor-pointer hover:text-[var(--text-primary)]" onClick={() => handleDonutClick(r.bu)} title={r.bu}>
+                    {r.bu}
+                  </div>
+                  <div className="flex-1 h-6 bg-[var(--bg-muted)] rounded-sm overflow-hidden flex relative group">
+                    {categories.map((c: string) => {
+                      const cVal = metricMode === 'Count' ? r.cells[c]?.count : r.cells[c]?.acv
+                      if (!cVal) return null
+                      const w = (cVal / rVal) * 100
+                      return (
+                        <div 
+                          key={c}
+                          className="h-full cursor-pointer hover:brightness-110 transition-all border-r border-[var(--bg-card)] last:border-r-0"
+                          style={{ width: `${w}%`, backgroundColor: catColors[c] || '#ccc' }}
+                          title={`${r.bu} - ${c}: ${metricMode === 'Count' ? cVal : formatACV(cVal)}`}
+                          onClick={() => handleBarClick(r.bu, c)}
+                        />
+                      )
+                    })}
+                  </div>
+                  <div className="w-16 shrink-0 text-xs text-[var(--text-muted)] text-right tabular-nums">
+                    {metricMode === 'Count' ? rVal : formatACV(rVal)}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex flex-wrap justify-center gap-3 mt-4">
+            {categories.map((c: string) => (
+              <div key={c} className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
+                <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: catColors[c] || '#ccc' }} />
+                {c}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Small Donut */}
+        <Card className="p-4 flex flex-col min-h-[300px]">
+          <h3 className="text-sm font-bold text-[var(--text-secondary)] mb-4">ACV Share</h3>
+          <div className="flex-1 flex flex-col gap-2 overflow-y-auto pr-1">
+            {rows.map((r: any, i: number) => {
+              const color = donutColors[i % donutColors.length]
+              return (
+                <div 
+                  key={r.bu} 
+                  className="flex items-center justify-between p-2 rounded-md hover:bg-[var(--bg-muted)] cursor-pointer transition-colors"
+                  onClick={() => handleDonutClick(r.bu)}
+                >
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                    <span className="text-xs font-medium text-[var(--text-primary)] truncate">{r.bu}</span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-xs font-bold text-[var(--text-primary)]">{r.pct_acv}%</div>
+                    <div className="text-[10px] text-[var(--text-muted)]">{formatACV(r.acv)}</div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      </div>
+
+      {/* Matrix */}
+      <Card className="p-1">
+        <div className="p-3 flex justify-between items-center border-b border-[var(--border)]">
+          <h2 className="text-sm font-bold text-[var(--text-primary)]">Forecast Category by Business Unit</h2>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--text-muted)] font-medium">Heat by:</span>
+            <div className="flex bg-[var(--bg-muted)] rounded-md p-0.5">
+              {(['Value', 'Yesterday', 'LastWeek'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setHeatMode(m)}
+                  className={`px-2 py-0.5 text-[10px] rounded-sm font-medium transition-colors ${heatMode === m ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
+                >
+                  {m === 'Value' ? 'Value' : `vs ${m}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <CompactGrid
+            title="Business Units"
+            rowLabelName="Business Unit"
+            columns={categories}
+            rows={gridRows}
+            totals={{ category: totals.categories, grand: totals.grand }}
+            deltas={gridDeltas}
+            metricMode={metricMode}
+            onCellClick={handleCellClick}
+            compareDate={prevDate}
+            heatMode={heatMode}
           />
         </div>
-      </div>
-
-      {/* Summary KPI Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <Card className="p-3.5 border-l-4 border-l-teal-500">
-          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Total Pipeline
-          </div>
-          <div className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums mt-1">
-            {formatCount(totalRow.total_count)}
-          </div>
-          <div className="text-xs font-bold text-teal-600 dark:text-teal-400 tabular-nums mt-0.5">
-            {formatACV(totalRow.acv)}
-          </div>
-        </Card>
-
-        <Card className="p-3.5 border-l-4 border-l-emerald-500">
-          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Approved
-          </div>
-          <div className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums mt-1">
-            {formatCount(totalRow.approved_count)}
-          </div>
-          <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums mt-0.5">
-            {totalRow.mix?.Approved}% of deals
-          </div>
-        </Card>
-
-        <Card className="p-3.5 border-l-4 border-l-teal-600">
-          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Approved - 2nd
-          </div>
-          <div className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums mt-1">
-            {formatCount(totalRow.approved_2nd_count)}
-          </div>
-          <div className="text-xs font-bold text-teal-600 dark:text-teal-400 tabular-nums mt-0.5">
-            {totalRow.mix?.['Approved - 2nd']}% of deals
-          </div>
-        </Card>
-
-        <Card className="p-3.5 border-l-4 border-l-amber-500">
-          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Pending-Approval
-          </div>
-          <div className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums mt-1">
-            {formatCount(totalRow.pending_count)}
-          </div>
-          <div className="text-xs font-bold text-amber-600 dark:text-amber-400 tabular-nums mt-0.5">
-            {totalRow.mix?.['Pending-Approval']}% of deals
-          </div>
-        </Card>
-
-        <Card className="p-3.5 border-l-4 border-l-slate-400">
-          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Blank
-          </div>
-          <div className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums mt-1">
-            {formatCount(totalRow.blank_count)}
-          </div>
-          <div className="text-xs font-bold text-slate-500 dark:text-slate-400 tabular-nums mt-0.5">
-            {totalRow.mix?.Blank}% of deals
-          </div>
-        </Card>
-
-        <Card className="p-3.5 border-l-4 border-l-rose-500">
-          <div className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Rejected
-          </div>
-          <div className="text-xl font-black font-display text-[var(--text-primary)] tabular-nums mt-1">
-            {formatCount(totalRow.rejected_count)}
-          </div>
-          <div className="text-xs font-bold text-rose-600 dark:text-rose-400 tabular-nums mt-0.5">
-            {totalRow.mix?.Rejected}% of deals
-          </div>
-        </Card>
-      </div>
-
-      {/* Main Business Unit Table Card */}
-      <Card className="p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-4 border-b border-[var(--border)]">
-          <div>
-            <h2 className="text-base font-bold font-display text-[var(--text-primary)]">
-              Business Unit Governance Breakdown
-            </h2>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">
-              {buMode === 'as_in_excel'
-                ? 'Showing distinct Business Unit combinations as in raw Excel (16 rows). Click any row to view opportunities.'
-                : 'Showing split view where multi-BU opportunities count once under each individual Business Unit (5 BUs).'}
-            </p>
-          </div>
-
-          <Badge variant="outline" className="text-xs">
-            {buMode === 'as_in_excel' ? '16 Unique Segments' : '5 Core Business Units'}
-          </Badge>
+        <div className="px-4 py-2 border-t border-[var(--border)]">
+          {insightLines.map((l, i) => (
+            <SummaryLine key={i} text={l} />
+          ))}
         </div>
+      </Card>
 
-        {/* Matrix Table */}
+      {/* Top Opportunities */}
+      <Card className="p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
+          <h2 className="text-sm font-bold text-[var(--text-primary)]">Top Opportunities</h2>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-[var(--text-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search..."
+                value={topSearch}
+                onChange={e => setTopSearch(e.target.value)}
+                className="pl-8 pr-3 py-1.5 text-xs bg-[var(--bg-muted)] border-none rounded-md text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:ring-1 focus:ring-indigo-500 w-48"
+              />
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-3 mb-2 scrollbar-thin">
+          <button
+            onClick={() => setTopBuFilter('All')}
+            className={`px-3 py-1 text-[11px] font-medium rounded-full whitespace-nowrap transition-colors border ${topBuFilter === 'All' ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20' : 'bg-[var(--bg-muted)] text-[var(--text-secondary)] border-transparent hover:bg-[var(--bg-card)]'}`}
+          >
+            All Units
+          </button>
+          {rows.map((r: any) => (
+            <button
+              key={r.bu}
+              onClick={() => setTopBuFilter(r.bu)}
+              className={`px-3 py-1 text-[11px] font-medium rounded-full whitespace-nowrap transition-colors border ${topBuFilter === r.bu ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20' : 'bg-[var(--bg-muted)] text-[var(--text-secondary)] border-transparent hover:bg-[var(--bg-card)]'}`}
+            >
+              {r.bu}
+            </button>
+          ))}
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left text-xs whitespace-nowrap">
             <thead>
-              <tr className="border-b border-[var(--border)] select-none">
-                <th className="py-3 px-4 font-bold text-[var(--text-primary)] uppercase tracking-wider text-[11px]">
-                  Business Unit
-                </th>
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-[var(--text-primary)]">
-                  Deals
-                </th>
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-teal-600 dark:text-teal-400">
-                  Total ACV
-                </th>
-                {/* Colour-coded columns */}
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-emerald-600 dark:text-emerald-400">
-                  Approved
-                </th>
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-teal-700 dark:text-teal-300">
-                  Approved - 2nd
-                </th>
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-amber-600 dark:text-amber-400">
-                  Pending
-                </th>
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-slate-500 dark:text-slate-400">
-                  Blank
-                </th>
-                <th className="py-3 px-3 font-bold text-right uppercase tracking-wider text-[11px] text-rose-600 dark:text-rose-400">
-                  Rejected
-                </th>
-                <th className="py-3 px-4 font-bold uppercase tracking-wider text-[11px] text-[var(--text-muted)] w-48">
-                  Approval Mix
-                </th>
+              <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
+                <th className="py-2 px-3 font-medium">Opportunity</th>
+                <th className="py-2 px-3 font-medium">Account</th>
+                <th className="py-2 px-3 font-medium text-right">ACV</th>
+                <th className="py-2 px-3 font-medium">Category</th>
+                <th className="py-2 px-3 font-medium">Close Date</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[var(--border)]">
-              {isLoading ? (
-                [...Array(6)].map((_, i) => (
-                  <tr key={i}>
-                    <td colSpan={9} className="py-3 px-4">
-                      <Skeleton className="h-9 w-full rounded-lg" />
+            <tbody>
+              {filteredDeals.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-[var(--text-muted)]">No opportunities found</td>
+                </tr>
+              ) : (
+                filteredDeals.map((d: any) => (
+                  <tr 
+                    key={d.opportunity_id_18} 
+                    className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--bg-muted)] cursor-pointer transition-colors"
+                    onClick={() => setSelectedOppId(d.opportunity_id_18)}
+                  >
+                    <td className="py-2 px-3 font-medium text-[var(--text-primary)] truncate max-w-[200px]" title={d.opportunity_name}>
+                      {d.opportunity_name}
+                    </td>
+                    <td className="py-2 px-3 text-[var(--text-secondary)] truncate max-w-[150px]">{d.account_name}</td>
+                    <td className="py-2 px-3 text-right font-medium text-[var(--text-primary)]">{formatACV(d.forecast_acv_amount)}</td>
+                    <td className="py-2 px-3">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ backgroundColor: `${catColors[d.forecast_category] || '#ccc'}20`, color: catColors[d.forecast_category] || '#ccc' }}>
+                        {d.forecast_category}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-[var(--text-muted)]">
+                      {d.close_date ? new Date(d.close_date).toLocaleDateString() : '-'}
                     </td>
                   </tr>
                 ))
-              ) : (
-                rows.map((row: any) => {
-                  const mix = row.mix || {}
-                  return (
-                    <tr
-                      key={row.business_unit}
-                      onClick={() => handleRowClick(row.business_unit)}
-                      className="cursor-pointer hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors group"
-                    >
-                      {/* BU Name */}
-                      <td className="py-3.5 px-4 font-bold text-[var(--text-primary)] group-hover:text-teal-500 transition-colors whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          <span>{row.business_unit}</span>
-                          <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-teal-500 flex-shrink-0" />
-                        </div>
-                      </td>
-
-                      {/* Total Count */}
-                      <td className="py-3.5 px-3 text-right font-extrabold text-[var(--text-primary)] tabular-nums">
-                        {formatCount(row.total_count)}
-                      </td>
-
-                      {/* ACV */}
-                      <td className="py-3.5 px-3 text-right font-bold text-teal-600 dark:text-teal-400 tabular-nums whitespace-nowrap">
-                        {formatACV(row.acv)}
-                      </td>
-
-                      {/* Approved (green) */}
-                      <td
-                        onClick={(e) => handleStatusCellClick(row.business_unit, 'Approved', e)}
-                        className="py-3.5 px-3 text-right font-bold text-emerald-600 dark:text-emerald-400 tabular-nums hover:underline"
-                      >
-                        {formatCount(row.approved_count)}
-                      </td>
-
-                      {/* Approved - 2nd (emerald/teal) */}
-                      <td
-                        onClick={(e) => handleStatusCellClick(row.business_unit, 'Approved - 2nd', e)}
-                        className="py-3.5 px-3 text-right font-bold text-teal-700 dark:text-teal-300 tabular-nums hover:underline"
-                      >
-                        {formatCount(row.approved_2nd_count)}
-                      </td>
-
-                      {/* Pending-Approval (amber) */}
-                      <td
-                        onClick={(e) => handleStatusCellClick(row.business_unit, 'Pending-Approval', e)}
-                        className="py-3.5 px-3 text-right font-bold text-amber-600 dark:text-amber-400 tabular-nums hover:underline"
-                      >
-                        {formatCount(row.pending_count)}
-                      </td>
-
-                      {/* Blank (slate/grey) */}
-                      <td
-                        onClick={(e) => handleStatusCellClick(row.business_unit, 'Blank', e)}
-                        className="py-3.5 px-3 text-right font-medium text-slate-500 dark:text-slate-400 tabular-nums hover:underline"
-                      >
-                        {formatCount(row.blank_count)}
-                      </td>
-
-                      {/* Rejected (red) */}
-                      <td
-                        onClick={(e) => handleStatusCellClick(row.business_unit, 'Rejected', e)}
-                        className="py-3.5 px-3 text-right font-bold text-rose-600 dark:text-rose-400 tabular-nums hover:underline"
-                      >
-                        {formatCount(row.rejected_count)}
-                      </td>
-
-                      {/* Mini Stacked Bar */}
-                      <td className="py-3.5 px-4">
-                        <div className="w-full h-2 rounded-full overflow-hidden flex bg-slate-100 dark:bg-white/10 gap-0.5">
-                          {mix.Approved > 0 && (
-                            <div
-                              style={{ width: `${mix.Approved}%`, backgroundColor: '#10B981' }}
-                              title={`Approved: ${mix.Approved}%`}
-                              className="h-full"
-                            />
-                          )}
-                          {mix['Approved - 2nd'] > 0 && (
-                            <div
-                              style={{ width: `${mix['Approved - 2nd']}%`, backgroundColor: '#00A3AD' }}
-                              title={`Approved - 2nd: ${mix['Approved - 2nd']}%`}
-                              className="h-full"
-                            />
-                          )}
-                          {mix['Pending-Approval'] > 0 && (
-                            <div
-                              style={{ width: `${mix['Pending-Approval']}%`, backgroundColor: '#F59E0B' }}
-                              title={`Pending: ${mix['Pending-Approval']}%`}
-                              className="h-full"
-                            />
-                          )}
-                          {mix.Blank > 0 && (
-                            <div
-                              style={{ width: `${mix.Blank}%`, backgroundColor: '#94A3B8' }}
-                              title={`Blank: ${mix.Blank}%`}
-                              className="h-full"
-                            />
-                          )}
-                          {mix.Rejected > 0 && (
-                            <div
-                              style={{ width: `${mix.Rejected}%`, backgroundColor: '#EF4444' }}
-                              title={`Rejected: ${mix.Rejected}%`}
-                              className="h-full"
-                            />
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })
               )}
-
-              {/* Total Row */}
-              <tr className="bg-slate-100/90 dark:bg-white/[0.06] font-bold border-t-2 border-[var(--border)]">
-                <td className="py-4 px-4 font-black font-display text-[var(--text-primary)] uppercase tracking-wider text-xs">
-                  {totalRow.business_unit}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-sm text-[var(--text-primary)] tabular-nums">
-                  {formatCount(totalRow.total_count)}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-sm text-teal-600 dark:text-teal-400 tabular-nums whitespace-nowrap">
-                  {formatACV(totalRow.acv)}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-xs text-emerald-600 dark:text-emerald-400 tabular-nums">
-                  {formatCount(totalRow.approved_count)}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-xs text-teal-700 dark:text-teal-300 tabular-nums">
-                  {formatCount(totalRow.approved_2nd_count)}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-xs text-amber-600 dark:text-amber-400 tabular-nums">
-                  {formatCount(totalRow.pending_count)}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                  {formatCount(totalRow.blank_count)}
-                </td>
-                <td className="py-4 px-3 text-right font-black text-xs text-rose-600 dark:text-rose-400 tabular-nums">
-                  {formatCount(totalRow.rejected_count)}
-                </td>
-                <td className="py-4 px-4">
-                  <div className="w-full h-2.5 rounded-full overflow-hidden flex bg-slate-200 dark:bg-white/10 gap-0.5">
-                    <div style={{ width: `${totalRow.mix?.Approved}%`, backgroundColor: '#10B981' }} className="h-full" />
-                    <div style={{ width: `${totalRow.mix?.['Approved - 2nd']}%`, backgroundColor: '#00A3AD' }} className="h-full" />
-                    <div style={{ width: `${totalRow.mix?.['Pending-Approval']}%`, backgroundColor: '#F59E0B' }} className="h-full" />
-                    <div style={{ width: `${totalRow.mix?.Blank}%`, backgroundColor: '#94A3B8' }} className="h-full" />
-                    <div style={{ width: `${totalRow.mix?.Rejected}%`, backgroundColor: '#EF4444' }} className="h-full" />
-                  </div>
-                </td>
-              </tr>
             </tbody>
           </table>
         </div>
       </Card>
 
-      {/* Drilldown List Drawer */}
-      <OpportunitiesListDrawer
-        isOpen={listDrawerOpen}
-        onClose={() => setListDrawerOpen(false)}
-        title={listDrawerTitle}
-        subtitle={listDrawerSubtitle}
-        filters={drawerFilters}
-        onSelectOpp={(id) => setSelectedOppId(id)}
+      <DealListModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={modalTitle}
+        filters={modalFilters}
+        endpoint="/api/v2/business-units/deals"
       />
 
-      {/* Deep-dive Opportunity Drawer */}
-      <OpportunityDrawer oppId={selectedOppId} onClose={() => setSelectedOppId(null)} />
+      <OpportunityDrawer
+        opportunityId={selectedOppId}
+        open={!!selectedOppId}
+        onClose={() => setSelectedOppId(null)}
+      />
     </div>
+  )
+}
+
+export default function BusinessUnits() {
+  return (
+    <ErrorBoundary>
+      <BusinessUnitsContent />
+    </ErrorBoundary>
   )
 }

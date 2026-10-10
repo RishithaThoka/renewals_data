@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.config import settings
 from backend.database import init_db
 from backend.routers import snapshots, analytics, opportunities, ai, export, insights, health
-from backend.routers import v2_overview, v2_expiry, v2_approvals
+from backend.routers import v2_overview, v2_expiry, v2_approvals, v2_business_units
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,7 +53,8 @@ app.include_router(insights.router, prefix="/api")
 app.include_router(health.router)
 app.include_router(v2_overview.router)
 app.include_router(v2_expiry.router)
-app.include_router(v2_approvals.router)  # has its own /api/v2/overview prefix
+app.include_router(v2_approvals.router)
+app.include_router(v2_business_units.router)  # has its own /api/v2/overview prefix
 
 # Direct routes without /api prefix
 app.include_router(snapshots.router)
